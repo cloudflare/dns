@@ -317,7 +317,7 @@ func (c *Client) Exchange(m *Msg, a string) (r *Msg, err error) {
 func (c *Client) ExchangeRtt(m *Msg, a string) (r *Msg, rtt time.Duration, addr net.Addr, err error) {
 	var n int
 	var w *reply
-	out, ok := m.Pack()
+	out, ok := m.Pack(nil)
 	if !ok {
 		return nil, 0, nil, ErrPack
 	}
@@ -477,7 +477,7 @@ func (w *reply) Send(m *Msg) (err error) {
 		w.tsigRequestMAC = mac
 	} else {
 		ok := false
-		out, ok = m.Pack()
+		out, ok = m.Pack(nil)
 		if !ok {
 			return ErrPack
 		}

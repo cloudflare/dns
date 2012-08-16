@@ -359,7 +359,7 @@ func (w *response) Write(m *Msg) (err error) {
 			return err
 		}
 	} else {
-		data, ok = m.Pack()
+		data, ok = m.Pack(nil)
 		if !ok {
 			return ErrPack
 		}
