@@ -1,9 +1,9 @@
 package main
 
 import (
-	"dns"
 	"flag"
 	"fmt"
+	"github.com/miekg/dns"
 	"net"
 	"os"
 	"strconv"
@@ -11,31 +11,18 @@ import (
 	"time"
 )
 
-var dnskey *dns.RR_DNSKEY
+// TODO: serial in ixfr
 
-func q(w dns.RequestWriter, m *dns.Msg) {
-	if err := w.Send(m); err != nil {
-		fmt.Printf("%s\n", err.Error())
-		w.Write(nil)
-		return
-	}
-	r, err := w.Receive()
-	if err != nil {
-		fmt.Printf("%s\n", err.Error())
-		w.Write(nil)
-		return
-	}
-	w.Close()
-	if w.TsigStatus() != nil {
-		fmt.Printf(";; Couldn't verify TSIG signature: %s\n", w.TsigStatus().Error())
-	}
-	w.Write(r)
-}
+var (
+	dnskey *dns.RR_DNSKEY
+	short  *bool
+)
 
 func main() {
+	short = flag.Bool("short", false, "abbreviate long DNSSEC records")
+
 	dnssec := flag.Bool("dnssec", false, "request DNSSEC records")
 	query := flag.Bool("question", false, "show question")
-	short := flag.Bool("short", false, "abbreviate long DNSSEC records")
 	check := flag.Bool("check", false, "check internal DNSSEC consistency")
 	six := flag.Bool("6", false, "use IPv6 only")
 	four := flag.Bool("4", false, "use IPv4 only")
@@ -50,6 +37,7 @@ func main() {
 	tcp := flag.Bool("tcp", false, "TCP mode")
 	nsid := flag.Bool("nsid", false, "set edns nsid option")
 	client := flag.String("client", "", "set edns client-subnet option")
+	//serial := flag.Int("serial", 0, "perform an IXFR with this serial")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [@server] [qtype] [qclass] [name ...]\n", os.Args[0])
 		flag.PrintDefaults()
@@ -58,7 +46,7 @@ func main() {
 	conf, _ := dns.ClientConfigFromFile("/etc/resolv.conf")
 	nameserver := "@" + conf.Servers[0]
 	qtype := uint16(0)
-	qclass := uint16(dns.ClassINET) // Default qclass
+	qclass := uint16(dns.ClassINET)
 	var qname []string
 
 	flag.Parse()
@@ -89,14 +77,6 @@ Flags:
 		// And if it looks like type, it is a type
 		if k, ok := dns.Str_rr[strings.ToUpper(flag.Arg(i))]; ok {
 			qtype = k
-			switch qtype {
-			case dns.TypeAXFR:
-				fmt.Fprintf(os.Stderr, "AXFR not supported\n")
-				return
-			case dns.TypeIXFR:
-				fmt.Fprintf(os.Stderr, "AXFR not supported\n")
-				return
-			}
 			continue Flags
 		}
 		// If it looks like a class, it is a class
@@ -109,14 +89,6 @@ Flags:
 			i, e := strconv.Atoi(string([]byte(flag.Arg(i))[4:]))
 			if e == nil {
 				qtype = uint16(i)
-				switch qtype {
-				case dns.TypeAXFR:
-					fmt.Fprintf(os.Stderr, "AXFR not supported\n")
-					return
-				case dns.TypeIXFR:
-					fmt.Fprintf(os.Stderr, "AXFR not supported\n")
-					return
-				}
 				continue Flags
 			}
 		}
@@ -134,11 +106,19 @@ Flags:
 	}
 
 	nameserver = string([]byte(nameserver)[1:]) // chop off @
-	nameserver += ":" + strconv.Itoa(*port)
-
+	if i := net.ParseIP(nameserver); i != nil {
+		switch {
+		case i.To4() != nil:
+			// it's a v4 address
+			nameserver += ":" + strconv.Itoa(*port)
+		case i.To16() != nil:
+			// v6 address
+			nameserver = "[" + nameserver + "]:" + strconv.Itoa(*port)
+		}
+	} else {
+		nameserver = dns.Fqdn(nameserver) + ":" + strconv.Itoa(*port)
+	}
 	// We use the async query handling, just to show how it is to be used.
-	dns.HandleQuery(".", q)
-	dns.ListenAndQuery(nil)
 	c := new(dns.Client)
 	if *tcp {
 		c.Net = "tcp"
@@ -200,8 +180,8 @@ Flags:
 		m.Extra = append(m.Extra, o)
 	}
 
-	for _, v := range qname {
-		m.Question[0] = dns.Question{v, qtype, qclass}
+	for i, v := range qname {
+		m.Question[0] = dns.Question{dns.Fqdn(v), qtype, qclass}
 		m.Id = dns.Id()
 		if *query {
 			fmt.Printf("%s", m.String())
@@ -213,66 +193,79 @@ Flags:
 				m.SetTsig(name, algo, 300, time.Now().Unix())
 				c.TsigSecret = map[string]string{name: secret}
 			} else {
-				fmt.Fprintf(os.Stderr, "tsig key data error\n")
+				fmt.Fprintf(os.Stderr, "TSIG key data error\n")
 				return
 			}
 		}
-		c.Do(m, nameserver)
-	}
-
-	i := 0
-forever:
-	for {
-		select {
-		case r := <-c.Reply:
-			if r.Reply != nil {
-				if r.Reply.Rcode == dns.RcodeSuccess {
-					if r.Request.Id != r.Reply.Id {
-						fmt.Printf("Id mismatch\n")
-					}
-				}
-				if r.Reply.MsgHdr.Truncated && *fallback {
-					if c.Net != "tcp" {
-						if !*dnssec {
-							fmt.Printf(";; Truncated, trying %d bytes bufsize\n", dns.DefaultMsgSize)
-							o := new(dns.RR_OPT)
-							o.Hdr.Name = "."
-							o.Hdr.Rrtype = dns.TypeOPT
-							o.SetUDPSize(dns.DefaultMsgSize)
-							m.Extra = append(m.Extra, o)
-							*dnssec = true
-							c.Do(m, nameserver)
-							break
-						} else {
-							// First EDNS, then TCP
-							fmt.Printf(";; Truncated, trying TCP\n")
-							c.Net = "tcp"
-							c.Do(m, nameserver)
-							break
-						}
-					}
-				}
-				if r.Reply.MsgHdr.Truncated && !*fallback {
-					fmt.Printf(";; Truncated\n")
-				}
-				if *check {
-					sigCheck(r.Reply, nameserver, *tcp)
-					nsecCheck(r.Reply)
-//					dns.AssertDelegationSigner(r.Reply, nil)
-				}
-				if *short {
-					r.Reply = shortMsg(r.Reply)
-				}
-
-				fmt.Printf("%v", r.Reply)
-				fmt.Printf("\n;; query time: %.3d µs, server: %s(%s), size: %d bytes\n", r.Rtt/1e3, r.RemoteAddr, r.RemoteAddr.Network(), r.Reply.Size)
-			}
-			i++
-			if i == len(qname) {
-				break forever
-			}
+		if qtype == dns.TypeAXFR {
+			c.Net = "tcp"
+			doXfr(c, m, nameserver)
+			continue
 		}
+		if qtype == dns.TypeIXFR {
+			doXfr(c, m, nameserver)
+			continue
+		}
+
+		c.DoRtt(m, nameserver, nil, func(m, r *dns.Msg, rtt time.Duration, e error, data interface{}) {
+			defer func() {
+				if i == len(qname)-1 {
+					os.Exit(0)
+				}
+			}()
+		Redo:
+			if e != nil {
+				fmt.Printf(";; %s\n", e.Error())
+				return
+			}
+			if r.Rcode != dns.RcodeSuccess {
+				return
+			}
+			if r.Id != m.Id {
+				fmt.Fprintf(os.Stderr, "Id mismatch\n")
+				return
+			}
+			if r.MsgHdr.Truncated && *fallback {
+				if c.Net != "tcp" {
+					if !*dnssec {
+						fmt.Printf(";; Truncated, trying %d bytes bufsize\n", dns.DefaultMsgSize)
+						o := new(dns.RR_OPT)
+						o.Hdr.Name = "."
+						o.Hdr.Rrtype = dns.TypeOPT
+						o.SetUDPSize(dns.DefaultMsgSize)
+						m.Extra = append(m.Extra, o)
+						r, rtt, e = c.ExchangeRtt(m, nameserver)
+						*dnssec = true
+						goto Redo
+					} else {
+						// First EDNS, then TCP
+						fmt.Printf(";; Truncated, trying TCP\n")
+						c.Net = "tcp"
+						r, rtt, e = c.ExchangeRtt(m, nameserver)
+						goto Redo
+					}
+				}
+			}
+			if r.MsgHdr.Truncated && !*fallback {
+				fmt.Printf(";; Truncated\n")
+			}
+			if *check {
+				sigCheck(r, nameserver, *tcp)
+				nsecCheck(r)
+			}
+			if *short {
+				r = shortMsg(r)
+			}
+
+			fmt.Printf("%v", r)
+			fmt.Printf("\n;; query time: %.3d µs, server: %s(%s), size: %d bytes\n", rtt/1e3, nameserver, c.Net, r.Size)
+		})
 	}
+	if qtype != dns.TypeAXFR && qtype != dns.TypeIXFR {
+		// xfr don't start any goroutines
+		select {}
+	}
+
 }
 
 func tsigKeyParse(s string) (algo, name, secret string, ok bool) {
@@ -340,18 +333,20 @@ func nsecCheck(in *dns.Msg) {
 	}
 	return
 Check:
-	w, err := in.Nsec3Verify(in.Question[0])
-	switch w {
-	case dns.NSEC3_NXDOMAIN:
-		fmt.Printf(";+ [beta] Correct denial of existence (NSEC3/NXDOMAIN)\n")
-	case dns.NSEC3_NODATA:
-		fmt.Printf(";+ [beta] Correct denial of existence (NSEC3/NODATA)\n")
-	default:
-		// w == 0
-		if err != nil {
-			fmt.Printf(";- [beta] Incorrect denial of existence (NSEC3): %s\n", err.Error())
+	/*
+		w, err := in.Nsec3Verify(in.Question[0])
+		switch w {
+		case dns.NSEC3_NXDOMAIN:
+			fmt.Printf(";+ [beta] Correct denial of existence (NSEC3/NXDOMAIN)\n")
+		case dns.NSEC3_NODATA:
+			fmt.Printf(";+ [beta] Correct denial of existence (NSEC3/NODATA)\n")
+		default:
+			// w == 0
+			if err != nil {
+				fmt.Printf(";- [beta] Incorrect denial of existence (NSEC3): %s\n", err.Error())
+			}
 		}
-	}
+	*/
 }
 
 // Check the sigs in the msg, get the signer's key (additional query), get the 
@@ -431,4 +426,23 @@ func shortRR(r dns.RR) dns.RR {
 		}
 	}
 	return r
+}
+
+func doXfr(c *dns.Client, m *dns.Msg, nameserver string) {
+	if t, e := c.XfrReceive(m, nameserver); e == nil {
+		for r := range t {
+			if r.Error == nil {
+				for _, rr := range r.RR {
+					if *short {
+						rr = shortRR(rr)
+					}
+					fmt.Printf("%v\n", rr)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "Failure to read XFR: %s\n", r.Error.Error())
+			}
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "Failure to read XFR: %s\n", e.Error())
+	}
 }

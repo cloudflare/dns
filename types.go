@@ -37,6 +37,7 @@ const (
 	TypeTXT        uint16 = 16
 	TypeRP         uint16 = 17
 	TypeAFSDB      uint16 = 18
+	TypeRT         uint16 = 21
 	TypeSIG        uint16 = 24
 	TypeKEY        uint16 = 25
 	TypeAAAA       uint16 = 28
@@ -70,9 +71,10 @@ const (
 	TypeMAILB uint16 = 253
 	TypeMAILA uint16 = 254
 	TypeANY   uint16 = 255
-	TypeURI   uint16 = 256
-	TypeTA    uint16 = 32768
-	TypeDLV   uint16 = 32769
+
+	TypeURI uint16 = 256
+	TypeTA  uint16 = 32768
+	TypeDLV uint16 = 32769
 
 	// valid Question.Qclass
 	ClassINET   = 1
@@ -406,6 +408,29 @@ func (rr *RR_AFSDB) Len() int {
 
 func (rr *RR_AFSDB) Copy() RR {
 	return &RR_AFSDB{*rr.Hdr.CopyHeader(), rr.Subtype, rr.Hostname}
+}
+
+type RR_RT struct {
+	Hdr        RR_Header
+	Preference uint16
+	Host       string `dns:"cdomain-name"`
+}
+
+func (rr *RR_RT) Header() *RR_Header {
+	return &rr.Hdr
+}
+
+func (rr *RR_RT) String() string {
+	return rr.Hdr.String() + strconv.Itoa(int(rr.Preference)) + " " + rr.Host
+}
+
+func (rr *RR_RT) Len() int {
+	l := len(rr.Host) + 1
+	return rr.Hdr.Len() + l + 2
+}
+
+func (rr *RR_RT) Copy() RR {
+	return &RR_RT{*rr.Hdr.CopyHeader(), rr.Preference, rr.Host}
 }
 
 type RR_NS struct {
@@ -819,8 +844,8 @@ func (rr *RR_RRSIG) String() string {
 		" " + strconv.Itoa(int(rr.Algorithm)) +
 		" " + strconv.Itoa(int(rr.Labels)) +
 		" " + strconv.FormatInt(int64(rr.OrigTtl), 10) +
-		" " + TimeToDate(rr.Expiration) +
-		" " + TimeToDate(rr.Inception) +
+		" " + TimeToString(rr.Expiration) +
+		" " + TimeToString(rr.Inception) +
 		" " + strconv.Itoa(int(rr.KeyTag)) +
 		" " + rr.SignerName +
 		" " + rr.Signature
@@ -859,7 +884,7 @@ func (rr *RR_NSEC) String() string {
 
 func (rr *RR_NSEC) Len() int {
 	l := len(rr.NextDomain) + 1
-	return rr.Hdr.Len() + l + 32
+	return rr.Hdr.Len() + l + 32 + 1
 	// TODO: +32 is max type bitmap
 }
 
@@ -1125,7 +1150,7 @@ type RR_NSEC3PARAM struct {
 	Flags      uint8
 	Iterations uint16
 	SaltLength uint8
-	Salt       string `dns:"hex"` // hexsize??
+	Salt       string `dns:"hex"`
 }
 
 func (rr *RR_NSEC3PARAM) Header() *RR_Header {
@@ -1180,7 +1205,7 @@ func (rr *RR_TKEY) Copy() RR {
 	return &RR_TKEY{*rr.Hdr.CopyHeader(), rr.Algorithm, rr.Inception, rr.Expiration, rr.Mode, rr.Error, rr.KeySize, rr.Key, rr.OtherLen, rr.OtherData}
 }
 
-// Unknown RR representation
+// RR_RFC3597 representes an unknown RR.
 type RR_RFC3597 struct {
 	Hdr   RR_Header
 	Rdata string `dns:"hex"`
@@ -1346,31 +1371,31 @@ func (rr *RR_WKS) Copy() RR {
 	return &RR_WKS{*rr.Hdr.CopyHeader(), rr.Address, rr.Protocol, rr.BitMap}
 }
 
-// TimeToDate translates the RRSIG's incep. and expir. times to the
+// TimeToString translates the RRSIG's incep. and expir. times to the
 // string representation used when printing the record.
 // It takes serial arithmetic (RFC 1982) into account.
-func TimeToDate(t uint32) string {
-	mod := ((int64(t) - time.Now().Unix()) / Year68) - 1
+func TimeToString(t uint32) string {
+	mod := ((int64(t) - time.Now().Unix()) / year68) - 1
 	if mod < 0 {
 		mod = 0
 	}
-	ti := time.Unix(int64(t)-(mod*Year68), 0).UTC()
+	ti := time.Unix(int64(t)-(mod*year68), 0).UTC()
 	return ti.Format("20060102150405")
 }
 
-// DateToTime translates the RRSIG's incep. and expir. times from 
+// StringToTime translates the RRSIG's incep. and expir. times from 
 // string values like "20110403154150" to an 32 bit integer.
 // It takes serial arithmetic (RFC 1982) into account.
-func DateToTime(s string) (uint32, error) {
+func StringToTime(s string) (uint32, error) {
 	t, e := time.Parse("20060102150405", s)
 	if e != nil {
 		return 0, e
 	}
-	mod := (t.Unix() / Year68) - 1
+	mod := (t.Unix() / year68) - 1
 	if mod < 0 {
 		mod = 0
 	}
-	return uint32(t.Unix() - (mod * Year68)), nil
+	return uint32(t.Unix() - (mod * year68)), nil
 }
 
 // saltString converts a NSECX salt to uppercase and
@@ -1396,7 +1421,7 @@ func cmToString(mantissa, exponent uint8) string {
 		}
 		return s
 	}
-	panic("not reached")
+	panic("dns: not reached")
 }
 
 // Map of constructors for each RR wire type.
@@ -1415,6 +1440,7 @@ var rr_mk = map[uint16]func() RR{
 	TypeNS:         func() RR { return new(RR_NS) },
 	TypePTR:        func() RR { return new(RR_PTR) },
 	TypeSOA:        func() RR { return new(RR_SOA) },
+	TypeRT:         func() RR { return new(RR_RT) },
 	TypeTXT:        func() RR { return new(RR_TXT) },
 	TypeSRV:        func() RR { return new(RR_SRV) },
 	TypeNAPTR:      func() RR { return new(RR_NAPTR) },

@@ -35,18 +35,6 @@
 // 
 package dns
 
-// The table from RFC 2136 supplemented with the Go DNS function.
-//
-// 3.2.4 - Table Of Metavalues Used In Prerequisite Section
-//
-//   CLASS    TYPE     RDATA    Meaning                     Function
-//   ---------------------------------------------------------------
-//   ANY      ANY      empty    Name is in use              NameUsed
-//   ANY      rrset    empty    RRset exists (value indep)  RRsetUsedNoRdata
-//   NONE     ANY      empty    Name is not in use          NameNotUsed
-//   NONE     rrset    empty    RRset does not exist        RRsetNotUsed
-//   zone     rrset    rr       RRset exists (value dep)    RRsetUsedRdata
-
 // NameUsed sets the RRs in the prereq section to
 // "Name is in use" RRs. RFC 2136 section 2.4.4.
 func (u *Msg) NameUsed(rr []RR) {
@@ -69,7 +57,7 @@ func (u *Msg) NameNotUsed(rr []RR) {
 // "RRset exists (value dependent -- with rdata)" RRs. RFC 2136 section 2.4.2.
 func (u *Msg) RRsetUsedRdata(rr []RR) {
 	if len(u.Question) == 0 {
-		panic("empty question section")
+		panic("dns: empty question section")
 	}
 	u.Answer = make([]RR, len(rr))
 	for i, r := range rr {
@@ -116,7 +104,7 @@ func (u *Msg) RRsetNotUsed(rr []RR) {
 // RRsetAddRdata creates a dynamic update packet that adds an complete RRset, see RFC 2136 section 2.5.1
 func (u *Msg) RRsetAddRdata(rr []RR) {
 	if len(u.Question) == 0 {
-		panic("empty question section")
+		panic("dns: empty question section")
 	}
 	u.Ns = make([]RR, len(rr))
 	for i, r := range rr {

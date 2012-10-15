@@ -1,26 +1,36 @@
-/* 
- * A name server which sends back the IP address of its client, the
- * recursive resolver. When queried for type TXT, it sends back the text
- * form of the address.  When queried for type A (resp. AAAA), it sends
- * back the IPv4 (resp. v6) address.
- *
- * Similar services: whoami.ultradns.net, whoami.akamai.net. Also (but it
- * is not their normal goal): rs.dns-oarc.net, porttest.dns-oarc.net,
- * amiopen.openresolvers.org.
- *
- * Original version from:
- * Stephane Bortzmeyer <stephane+grong@bortzmeyer.org>
- *
- * Adapted to Go DNS (i.e. completely rewritten)
- * Miek Gieben <miek@miek.nl>
- */
-
+// Reflect is a small name server which sends back the IP address of its client, the
+// recursive resolver. 
+// When queried for type A (resp. AAAA), it sends back the IPv4 (resp. v6) address.
+// In the additional section the port number and transport are shown.
+// 
+// Basic use pattern:
+// 
+//	dig @localhost -p 8053 whoami.miek.nl A
+//
+//	;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 2157
+//	;; flags: qr rd; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
+//	;; QUESTION SECTION:
+//	;whoami.miek.nl.			IN	A
+//
+//	;; ANSWER SECTION:
+//	whoami.miek.nl.		0	IN	A	127.0.0.1
+//
+//	;; ADDITIONAL SECTION:
+//	whoami.miek.nl.		0	IN	TXT	"Port: 56195 (udp)"
+//
+// Similar services: whoami.ultradns.net, whoami.akamai.net. Also (but it
+// is not their normal goal): rs.dns-oarc.net, porttest.dns-oarc.net,
+// amiopen.openresolvers.org.
+// 
+// Original version is from: Stephane Bortzmeyer <stephane+grong@bortzmeyer.org>.
+// 
+// Adapted to Go (i.e. completely rewritten) by Miek Gieben <miek@miek.nl>.
 package main
 
 import (
-	"dns"
 	"flag"
 	"fmt"
+	"github.com/miekg/dns"
 	"log"
 	"net"
 	"os"
@@ -28,6 +38,7 @@ import (
 	"runtime/pprof"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -76,6 +87,24 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 	t.Txt = []string{str}
 
 	switch r.Question[0].Qtype {
+	case dns.TypeAXFR:
+		c := make(chan *dns.XfrToken)
+		var e *error
+		if err := dns.XfrSend(w, r, c, e); err != nil {
+			close(c)
+			return
+		}
+		soa, _ := dns.NewRR(`whoami.miek.nl. IN SOA elektron.atoom.net. miekg.atoom.net. (
+			2009032802 
+			21600 
+			7200 
+			604800 
+			3600)`)
+		c <- &dns.XfrToken{RR: []dns.RR{soa, t, rr, soa}}
+		close(c)
+		w.Hijack()
+		// w.Close() // Client closes
+		return
 	case dns.TypeTXT:
 		m.Answer = append(m.Answer, t)
 		m.Extra = append(m.Extra, rr)
@@ -86,7 +115,7 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 		m.Extra = append(m.Extra, t)
 	}
 
-	if r.IsTsig() {
+	if r.IsTsig() != nil {
 		if w.TsigStatus() == nil {
 			m.SetTsig(r.Extra[len(r.Extra)-1].(*dns.RR_TSIG).Hdr.Name, dns.HmacMD5, 300, time.Now().Unix())
 		} else {
@@ -107,7 +136,8 @@ func serve(net, name, secret string) {
 			fmt.Printf("Failed to setup the "+net+" server: %s\n", err.Error())
 		}
 	default:
-		err := dns.ListenAndServeTsig(":8053", net, nil, map[string]string{name: secret})
+		server := &dns.Server{Addr: ":8053", Net: net, TsigSecret: map[string]string{name: secret}}
+		err := server.ListenAndServe()
 		if err != nil {
 			fmt.Printf("Failed to setup the "+net+" server: %s\n", err.Error())
 		}
@@ -126,7 +156,7 @@ func main() {
 	flag.Parse()
 	if *tsig != "" {
 		a := strings.SplitN(*tsig, ":", 2)
-		name, secret = a[0], a[1]
+		name, secret = dns.Fqdn(a[0]), a[1]	// fqdn the name, which everybody forgets...
 	}
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
@@ -137,16 +167,20 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	dns.HandleFunc(".", handleReflect)
+	dns.HandleFunc("miek.nl.", handleReflect)
+	dns.HandleFunc("authors.bind.", dns.HandleAuthors)
+	dns.HandleFunc("authors.server.", dns.HandleAuthors)
+	dns.HandleFunc("version.bind.", dns.HandleVersion)
+	dns.HandleFunc("version.server.", dns.HandleVersion)
 	go serve("tcp", name, secret)
 	go serve("udp", name, secret)
 	sig := make(chan os.Signal)
-	signal.Notify(sig)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 forever:
 	for {
 		select {
-		case <-sig:
-			fmt.Printf("Signal received, stopping\n")
+		case s:=<-sig:
+			fmt.Printf("Signal (%d) received, stopping\n", s)
 			break forever
 		}
 	}

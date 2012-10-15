@@ -19,34 +19,18 @@ func TestClientSync(t *testing.T) {
 	}
 }
 
-func helloMiek(w RequestWriter, r *Msg) {
-	w.Send(r)
-	reply, _ := w.Receive()
-	w.Write(reply)
-}
-
 func TestClientASync(t *testing.T) {
-	HandleQueryFunc("miek.nl.", helloMiek) // All queries for miek.nl will be handled by HelloMiek
-	ListenAndQuery(nil)                    // Detect if this isn't running
-
 	m := new(Msg)
 	m.SetQuestion("miek.nl.", TypeSOA)
 
 	c := new(Client)
-	c.Do(m, "85.223.71.124:53")
-
-forever:
-	for {
-		select {
-		case n := <-c.Reply:
-			if n.Reply != nil && n.Reply.Rcode != RcodeSuccess {
-				t.Log("Failed to get an valid answer")
-				t.Fail()
-				t.Logf("%v\n", n.Reply)
-			}
-			break forever
+	c.Do(m, "85.223.71.124:53", nil, func(m, r *Msg, e error, d interface{}) {
+		if r != nil && r.Rcode != RcodeSuccess {
+			t.Log("Failed to get an valid answer")
+			t.Fail()
+			t.Logf("%v\n", r)
 		}
-	}
+	})
 }
 
 func TestClientEDNS0(t *testing.T) {
@@ -77,21 +61,19 @@ func TestClientTsigAXFR(t *testing.T) {
 	c.Net = "tcp"
 
 	if a, err := c.XfrReceive(m, "85.223.71.124:53"); err != nil {
-		t.Log("Failed to setup axfr" + err.Error())
+		t.Log("Failed to setup axfr: " + err.Error())
 		t.Fail()
 		return
 	} else {
 		for ex := range a {
-			t.Log(ex.Reply.String())
 			if ex.Error != nil {
 				t.Logf("Error %s\n", ex.Error.Error())
 				t.Fail()
 				break
 			}
-			if ex.Reply.Rcode != RcodeSuccess {
-				break
+			for _, rr := range ex.RR {
+				t.Logf("%s\n", rr.String())
 			}
-			t.Logf("%s\n", ex.Reply.String())
 		}
 	}
 }
@@ -102,7 +84,6 @@ func TestClientAXFRMultipleMessages(t *testing.T) {
 
 	c := new(Client)
 	c.Net = "tcp"
-	// timeout?
 
 	if a, err := c.XfrReceive(m, "85.223.71.124:53"); err != nil {
 		t.Log("Failed to setup axfr" + err.Error())
@@ -110,13 +91,9 @@ func TestClientAXFRMultipleMessages(t *testing.T) {
 		return
 	} else {
 		for ex := range a {
-			t.Log(ex.Reply.String())
 			if ex.Error != nil {
 				t.Logf("Error %s\n", ex.Error.Error())
 				t.Fail()
-				break
-			}
-			if ex.Reply.Rcode != RcodeSuccess {
 				break
 			}
 		}

@@ -93,7 +93,7 @@ type Token struct {
 }
 
 // NewRR reads the RR contained in the string s. Only the first RR is returned.
-// The class defaults to IN and TTL defaults to DefaultTtl. The full zone file
+// The class defaults to IN and TTL defaults to 3600. The full zone file
 // syntax like $TTL, $ORIGIN, etc. is supported.
 func NewRR(s string) (RR, error) {
 	if s[len(s)-1] != '\n' { // We need a closing newline
@@ -103,7 +103,7 @@ func NewRR(s string) (RR, error) {
 }
 
 // ReadRR reads the RR contained in q. Only the first RR is returned.
-// The class defaults to IN and TTL defaults to DefaultTtl.
+// The class defaults to IN and TTL defaults to 3600.
 func ReadRR(q io.Reader, filename string) (RR, error) {
 	r := <-parseZoneHelper(q, ".", filename, 1)
 	if r.Error != nil {
@@ -162,17 +162,15 @@ func parseZone(r io.Reader, origin, f string, t chan Token, include int) {
 	if origin == "" {
 		origin = "."
 	}
-	if !IsFqdn(origin) {
-		t <- Token{Error: &ParseError{f, "bad initial origin name", lex{}}}
-		return
-	}
 	if _, _, ok := IsDomainName(origin); !ok {
 		t <- Token{Error: &ParseError{f, "bad initial origin name", lex{}}}
 		return
 	}
+	origin = Fqdn(origin)
+
 	st := _EXPECT_OWNER_DIR // initial state
 	var h RR_Header
-	var defttl uint32 = DefaultTtl
+	var defttl uint32 = defaultTtl
 	var prevName string
 	for l := range c {
 		if _DEBUG {

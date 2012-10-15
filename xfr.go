@@ -1,60 +1,67 @@
 package dns
 
-// XfrReceives requests an incoming Ixfr or Axfr. If the message q's question
-// section has type TypeAXFR an Axfr is performed, if it is TypeIXFR it does an Ixfr.
-// The [AI]xfr's records are returned on the channel. Note that with an IXFR the client
-// needs to determine if records are to be removed or added.
-// The returned channel is closed when the transfer is terminated.
+// XfrToken is used when doing [IA]xfr with a remote server.
+type XfrToken struct {
+	RR    []RR  // the set of RRs in the answer section of the AXFR reply message 
+	Error error // if something went wrong, this contains the error  
+}
+
+// XfrReceive performs a [AI]xfr request (depends on the message's Qtype). It returns
+// a channel of XfrToken on which the replies from the server are sent. At the end of
+// the transfer the channel is closed.
+// It panics if the Qtype does not equal TypeAXFR or TypeIXFR. The messages are TSIG checked if
+// needed, no other post-processing is performed. The caller must dissect the returned
+// messages.
 //
-// Basic use pattern for setting up a transfer:
+// Basic use pattern for receiving an AXFR:
 //
-//	// m contains the [AI]xfr request
-//	t, _ := client.XfrReceive(m, "127.0.0.1:53")
+//	// m contains the AXFR request
+//	t, e := client.XfrReceive(m, "127.0.0.1:53")
 //	for r := range t {
-//		// ... deal with r.Reply or r.Error
+//		// ... deal with r.RR or r.Error
 //	}
-func (c *Client) XfrReceive(q *Msg, a string) (chan *Exchange, error) {
+func (c *Client) XfrReceive(q *Msg, a string) (chan *XfrToken, error) {
 	w := new(reply)
 	w.client = c
 	w.addr = a
 	w.req = q
-	if err := w.Dial(); err != nil {
+	if err := w.dial(); err != nil {
 		return nil, err
 	}
-	if err := w.Send(q); err != nil {
+	if err := w.send(q); err != nil {
 		return nil, err
 	}
-	e := make(chan *Exchange)
+	e := make(chan *XfrToken)
 	switch q.Question[0].Qtype {
 	case TypeAXFR:
-		go w.axfrReceive(e)
+		go w.axfrReceive(q, e)
 		return e, nil
 	case TypeIXFR:
-		go w.ixfrReceive(e)
+		go w.ixfrReceive(q, e)
 		return e, nil
 	default:
-		return nil, ErrXfrType
+		return nil, nil
 	}
-	panic("not reached")
+	panic("dns: not reached")
 }
 
-func (w *reply) axfrReceive(c chan *Exchange) {
+func (w *reply) axfrReceive(q *Msg, c chan *XfrToken) {
 	first := true
-	defer w.Close()
+	defer w.conn.Close()
 	defer close(c)
 	for {
-		in, err := w.Receive()
+		in, err := w.receive()
 		if err != nil {
-			c <- &Exchange{Request: w.req, Reply: in, Rtt: w.rtt, RemoteAddr: w.conn.RemoteAddr(), Error: err}
+			c <- &XfrToken{nil, err}
 			return
 		}
-		if w.req.Id != in.Id {
-			c <- &Exchange{Request: w.req, Reply: in, Rtt: w.rtt, RemoteAddr: w.conn.RemoteAddr(), Error: ErrId}
+		if in.Id != q.Id {
+			c <- &XfrToken{in.Answer, ErrId}
 			return
 		}
 		if first {
 			if !checkXfrSOA(in, true) {
-				c <- &Exchange{Request: w.req, Reply: in, Rtt: w.rtt, RemoteAddr: w.conn.RemoteAddr(), Error: ErrXfrSoa}
+				c <- &XfrToken{in.Answer, ErrSoa}
 				return
 			}
 			first = !first
@@ -63,40 +70,40 @@ func (w *reply) axfrReceive(c chan *Exchange) {
 		if !first {
 			w.tsigTimersOnly = true // Subsequent envelopes use this.
 			if checkXfrSOA(in, false) {
-				c <- &Exchange{Request: w.req, Reply: in, Rtt: w.rtt, RemoteAddr: w.conn.RemoteAddr(), Error: nil}
+				c <- &XfrToken{in.Answer, nil}
 				return
 			}
-			c <- &Exchange{Request: w.req, Reply: in, Rtt: w.rtt, RemoteAddr: w.conn.RemoteAddr(), Error: nil}
+			c <- &XfrToken{in.Answer, nil}
 		}
 	}
-	panic("not reached")
+	panic("dns: not reached")
 }
 
-func (w *reply) ixfrReceive(c chan *Exchange) {
+func (w *reply) ixfrReceive(q *Msg, c chan *XfrToken) {
 	var serial uint32 // The first serial seen is the current server serial
 	first := true
-	defer w.Close()
+	defer w.conn.Close()
 	defer close(c)
 	for {
-		in, err := w.Receive()
+		in, err := w.receive()
 		if err != nil {
-			c <- &Exchange{Request: w.req, Reply: in, Rtt: w.rtt, RemoteAddr: w.conn.RemoteAddr(), Error: err}
+			c <- &XfrToken{in.Answer, err}
 			return
 		}
-		if w.req.Id != in.Id {
-			c <- &Exchange{Request: w.req, Reply: in, Rtt: w.rtt, RemoteAddr: w.conn.RemoteAddr(), Error: ErrId}
+		if q.Id != in.Id {
+			c <- &XfrToken{in.Answer, ErrId}
 			return
 		}
 		if first {
 			// A single SOA RR signals "no changes"
 			if len(in.Answer) == 1 && checkXfrSOA(in, true) {
-				c <- &Exchange{Request: w.req, Reply: in, Rtt: w.rtt, RemoteAddr: w.conn.RemoteAddr(), Error: nil}
+				c <- &XfrToken{in.Answer, nil}
 				return
 			}
 
 			// Check if the returned answer is ok
 			if !checkXfrSOA(in, true) {
-				c <- &Exchange{Request: w.req, Reply: in, Rtt: w.rtt, RemoteAddr: w.conn.RemoteAddr(), Error: ErrXfrSoa}
+				c <- &XfrToken{in.Answer, ErrSoa}
 				return
 			}
 			// This serial is important
@@ -110,82 +117,19 @@ func (w *reply) ixfrReceive(c chan *Exchange) {
 			// If the last record in the IXFR contains the servers' SOA,  we should quit
 			if v, ok := in.Answer[len(in.Answer)-1].(*RR_SOA); ok {
 				if v.Serial == serial {
-					c <- &Exchange{Request: w.req, Reply: in, Rtt: w.rtt, RemoteAddr: w.conn.RemoteAddr(), Error: nil}
+					c <- &XfrToken{in.Answer, nil}
 					return
 				}
 			}
-			c <- &Exchange{Request: w.req, Reply: in, Rtt: w.rtt, RemoteAddr: w.conn.RemoteAddr()}
+			c <- &XfrToken{in.Answer, nil}
 		}
 	}
-	panic("not reached")
+	panic("dns: not reached")
 }
-
-// XfrSend performs an outgoing Ixfr or Axfr. The function is [AI]xfr agnostic, it is
-// up to the caller to correctly send the sequence of messages.
-func XfrSend(w ResponseWriter, q *Msg, a string) error {
-	switch q.Question[0].Qtype {
-	case TypeAXFR, TypeIXFR:
-		//		go d.xfrWrite(q, m, e)
-	default:
-		return ErrXfrType
-	}
-	return nil
-}
-
-/*
-// Just send the zone
-func (d *Conn) axfrWrite(q *Msg, m chan *Xfr, e chan os.Error) {
-	out := new(Msg)
-	out.Id = q.Id
-	out.Question = q.Question
-	out.Answer = make([]RR, 1001) // TODO(mg) look at this number
-	out.MsgHdr.Response = true
-	out.MsgHdr.Authoritative = true
-        first := true
-	var soa *RR_SOA
-	i := 0
-	for r := range m {
-		out.Answer[i] = r.RR
-		if soa == nil {
-			if r.RR.Header().Rrtype != TypeSOA {
-				e <- ErrXfrSoa
-                                return
-			} else {
-				soa = r.RR.(*RR_SOA)
-			}
-		}
-		i++
-		if i > 1000 {
-			// Send it
-			err := d.WriteMsg(out)
-			if err != nil {
-				e <- err
-                                return
-			}
-			i = 0
-			// Gaat dit goed?
-			out.Answer = out.Answer[:0]
-                        if first {
-                                if d.Tsig != nil {
-                                        d.Tsig.TimersOnly = true
-                                }
-                                first = !first
-                        }
-		}
-	}
-	// Everything is sent, only the closing soa is left.
-	out.Answer[i] = soa
-	out.Answer = out.Answer[:i+1]
-	err := d.WriteMsg(out)
-	if err != nil {
-		e <- err
-	}
-}
-*/
 
 // Check if he SOA record exists in the Answer section of 
 // the packet. If first is true the first RR must be a SOA
-// if false, the last one should be a SOA
+// if false, the last one should be a SOA.
 func checkXfrSOA(in *Msg, first bool) bool {
 	if len(in.Answer) > 0 {
 		if first {
@@ -195,4 +139,55 @@ func checkXfrSOA(in *Msg, first bool) bool {
 		}
 	}
 	return false
+}
+
+// XfrSend performs an outgoing [AI]xfr depending on the request message. The
+// caller is responsible for sending the correct sequence of RR sets through
+// the channel c. For reasons of symmetry XfrToken is re-used.
+// Errors are signaled via the error pointer, when an error occurs the function
+// sets the error and returns (it does not close the channel).
+// TSIG and enveloping is handled by XfrSend.
+// 
+// Basic use pattern for sending an AXFR:
+//
+//	// q contains the AXFR request
+//	c := make(chan *XfrToken)
+//	var e *error
+//	err := XfrSend(w, q, c, e)
+//	w.Hijack()		// hijack the connection so that the library doesn't close it
+//	for _, rrset := range rrsets {	// rrset is a []RR
+//		c <- &{XfrToken{RR: rrset}
+//		if e != nil {
+//			close(c)
+//			break
+//		}
+//	}
+//	// w.Close() // Don't! Let the client close the connection
+func XfrSend(w ResponseWriter, q *Msg, c chan *XfrToken, e *error) error {
+	switch q.Question[0].Qtype {
+	case TypeAXFR, TypeIXFR:
+		go axfrSend(w, q, c, e)
+		return nil
+	default:
+		return nil
+	}
+	panic("dns: not reached")
+}
+
+// TODO(mg): count the RRs and the resulting size.
+func axfrSend(w ResponseWriter, req *Msg, c chan *XfrToken, e *error) {
+	rep := new(Msg)
+	rep.SetReply(req)
+	rep.Authoritative = true
+
+	for x := range c {
+		// assume it fits
+		rep.Answer = append(rep.Answer, x.RR...)
+		if err := w.Write(rep); e != nil {
+			*e = err
+			return
+		}
+		w.TsigTimersOnly(true)
+		rep.Answer = nil
+	}
 }

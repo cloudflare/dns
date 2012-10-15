@@ -3,6 +3,7 @@ package dns
 import (
 	"net"
 	"strconv"
+	"strings"
 )
 
 const hexDigit = "0123456789abcdef"
@@ -11,100 +12,112 @@ const hexDigit = "0123456789abcdef"
 // you need other classes you are on your own.
 
 // SetReply creates a reply packet from a request message.
-func (dns *Msg) SetReply(request *Msg) {
-	dns.MsgHdr.Id = request.MsgHdr.Id
-	dns.MsgHdr.Authoritative = true
-	dns.MsgHdr.Response = true
-	dns.MsgHdr.Opcode = OpcodeQuery
-	dns.MsgHdr.Rcode = RcodeSuccess
-	dns.Question = make([]Question, 1)
-	dns.Question[0] = request.Question[0]
+func (dns *Msg) SetReply(request *Msg) *Msg {
+	dns.Id = request.Id
+	dns.RecursionDesired = request.RecursionDesired // Copy rd bit
+	dns.Response = true
+	dns.Opcode = OpcodeQuery
+	dns.Rcode = RcodeSuccess
+	if len(request.Question) > 0 {
+		dns.Question = make([]Question, 1)
+		dns.Question[0] = request.Question[0]
+	}
+	return dns
 }
 
 // SetQuestion creates a question packet.
-func (dns *Msg) SetQuestion(z string, t uint16) {
-	dns.MsgHdr.Id = Id()
-	dns.MsgHdr.RecursionDesired = true
+func (dns *Msg) SetQuestion(z string, t uint16) *Msg {
+	dns.Id = Id()
+	dns.RecursionDesired = true
 	dns.Question = make([]Question, 1)
 	dns.Question[0] = Question{z, t, ClassINET}
+	return dns
 }
 
 // SetNotify creates a notify packet.
-func (dns *Msg) SetNotify(z string) {
-	dns.MsgHdr.Opcode = OpcodeNotify
-	dns.MsgHdr.Authoritative = true
-	dns.MsgHdr.Id = Id()
+func (dns *Msg) SetNotify(z string) *Msg {
+	dns.Opcode = OpcodeNotify
+	dns.Authoritative = true
+	dns.Id = Id()
 	dns.Question = make([]Question, 1)
 	dns.Question[0] = Question{z, TypeSOA, ClassINET}
+	return dns
 }
 
-// SetRcode creates an error packet.
-func (dns *Msg) SetRcode(request *Msg, rcode int) {
-	dns.MsgHdr.Rcode = rcode
-	dns.MsgHdr.Opcode = OpcodeQuery
-	dns.MsgHdr.Response = true
-	dns.MsgHdr.Authoritative = false
-	dns.MsgHdr.Id = request.MsgHdr.Id
-	dns.Question = make([]Question, 1)
-	dns.Question[0] = request.Question[0]
+// SetRcode creates an error packet suitable for the request.
+func (dns *Msg) SetRcode(request *Msg, rcode int) *Msg {
+	dns.Rcode = rcode
+	dns.Opcode = OpcodeQuery
+	dns.Response = true
+	dns.Id = request.Id
+	// Note that this is actually a FORMERR
+	if len(request.Question) > 0 {
+		dns.Question = make([]Question, 1)
+		dns.Question[0] = request.Question[0]
+	}
+	return dns
 }
 
 // SetRcodeFormatError creates a packet with FormError set.
-func (dns *Msg) SetRcodeFormatError(request *Msg) {
-	dns.MsgHdr.Rcode = RcodeFormatError
-	dns.MsgHdr.Opcode = OpcodeQuery
-	dns.MsgHdr.Response = true
-	dns.MsgHdr.Authoritative = false
-	dns.MsgHdr.Id = request.MsgHdr.Id
+func (dns *Msg) SetRcodeFormatError(request *Msg) *Msg {
+	dns.Rcode = RcodeFormatError
+	dns.Opcode = OpcodeQuery
+	dns.Response = true
+	dns.Authoritative = false
+	dns.Id = request.Id
+	return dns
 }
 
 // SetUpdate makes the message a dynamic update packet. It
-// sets the ZONE section to: z, TypeSOA, classINET.
-func (dns *Msg) SetUpdate(z string) {
-	dns.MsgHdr.Id = Id()
-	dns.MsgHdr.Response = false
-	dns.MsgHdr.Opcode = OpcodeUpdate
+// sets the ZONE section to: z, TypeSOA, ClassINET.
+func (dns *Msg) SetUpdate(z string) *Msg {
+	dns.Id = Id()
+	dns.Response = false
+	dns.Opcode = OpcodeUpdate
 	dns.Compress = false // BIND9 cannot handle compression
 	dns.Question = make([]Question, 1)
 	dns.Question[0] = Question{z, TypeSOA, ClassINET}
+	return dns
 }
 
 // SetIxfr creates dns msg suitable for requesting an ixfr.
-func (dns *Msg) SetIxfr(z string, serial uint32) {
-	dns.MsgHdr.Id = Id()
+func (dns *Msg) SetIxfr(z string, serial uint32) *Msg {
+	dns.Id = Id()
 	dns.Question = make([]Question, 1)
 	dns.Ns = make([]RR, 1)
 	s := new(RR_SOA)
-	s.Hdr = RR_Header{z, TypeSOA, ClassINET, DefaultTtl, 0}
+	s.Hdr = RR_Header{z, TypeSOA, ClassINET, defaultTtl, 0}
 	s.Serial = serial
-
 	dns.Question[0] = Question{z, TypeIXFR, ClassINET}
 	dns.Ns[0] = s
+	return dns
 }
 
 // SetAxfr creates dns msg suitable for requesting an axfr.
-func (dns *Msg) SetAxfr(z string) {
-	dns.MsgHdr.Id = Id()
+func (dns *Msg) SetAxfr(z string) *Msg {
+	dns.Id = Id()
 	dns.Question = make([]Question, 1)
 	dns.Question[0] = Question{z, TypeAXFR, ClassINET}
+	return dns
 }
 
 // SetTsig appends a TSIG RR to the message.
-// This is only a skeleton Tsig RR that is added as the last RR in the 
+// This is only a skeleton TSIG RR that is added as the last RR in the 
 // additional section. The Tsig is calculated when the message is being send.
-func (dns *Msg) SetTsig(z, algo string, fudge, timesigned int64) {
+func (dns *Msg) SetTsig(z, algo string, fudge, timesigned int64) *Msg {
 	t := new(RR_TSIG)
 	t.Hdr = RR_Header{z, TypeTSIG, ClassANY, 0, 0}
 	t.Algorithm = algo
 	t.Fudge = 300
 	t.TimeSigned = uint64(timesigned)
-	t.OrigId = dns.MsgHdr.Id
+	t.OrigId = dns.Id
 	dns.Extra = append(dns.Extra, t)
+	return dns
 }
 
 // SetEdns0 appends a EDNS0 OPT RR to the message. 
 // TSIG should always the last RR in a message.
-func (dns *Msg) SetEdns0(udpsize uint16, do bool) {
+func (dns *Msg) SetEdns0(udpsize uint16, do bool) *Msg {
 	e := new(RR_OPT)
 	e.Hdr.Name = "."
 	e.Hdr.Rrtype = TypeOPT
@@ -113,96 +126,30 @@ func (dns *Msg) SetEdns0(udpsize uint16, do bool) {
 		e.SetDo()
 	}
 	dns.Extra = append(dns.Extra, e)
-}
-
-// IsRcode checks if the header of the packet has rcode set.
-func (dns *Msg) IsRcode(rcode int) (ok bool) {
-	if len(dns.Question) == 0 {
-		return false
-	}
-	ok = dns.MsgHdr.Rcode == rcode
-	return
-}
-
-// IsQuestion returns true if the packet is a question.
-func (dns *Msg) IsQuestion() (ok bool) {
-	if len(dns.Question) == 0 {
-		return false
-	}
-	ok = dns.MsgHdr.Response == false
-	return
-}
-
-// IsRcodeFormatError checks if the message has FormErr set.
-func (dns *Msg) IsRcodeFormatError() (ok bool) {
-	if len(dns.Question) == 0 {
-		return false
-	}
-	ok = dns.MsgHdr.Rcode == RcodeFormatError
-	return
-}
-
-// IsUpdate checks if the message is a dynamic update packet.
-func (dns *Msg) IsUpdate() (ok bool) {
-	if len(dns.Question) == 0 {
-		return false
-	}
-	ok = dns.MsgHdr.Opcode == OpcodeUpdate
-	ok = ok && dns.Question[0].Qtype == TypeSOA
-	return
-}
-
-// IsNotify checks if the message is a valid notify packet.
-func (dns *Msg) IsNotify() (ok bool) {
-	if len(dns.Question) == 0 {
-		return false
-	}
-	ok = dns.MsgHdr.Opcode == OpcodeNotify
-	ok = ok && dns.Question[0].Qclass == ClassINET
-	ok = ok && dns.Question[0].Qtype == TypeSOA
-	return
-}
-
-// IsAxfr checks if the message is a valid axfr request packet.
-func (dns *Msg) IsAxfr() (ok bool) {
-	if len(dns.Question) == 0 {
-		return false
-	}
-	ok = dns.MsgHdr.Opcode == OpcodeQuery
-	ok = ok && dns.Question[0].Qclass == ClassINET
-	ok = ok && dns.Question[0].Qtype == TypeAXFR
-	return
-}
-
-// IsIXfr checks if the message is a valid ixfr request packet.
-func (dns *Msg) IsIxfr() (ok bool) {
-	if len(dns.Question) == 0 {
-		return false
-	}
-	ok = dns.MsgHdr.Opcode == OpcodeQuery
-	ok = ok && dns.Question[0].Qclass == ClassINET
-	ok = ok && dns.Question[0].Qtype == TypeIXFR
-	return
+	return dns
 }
 
 // IsTsig checks if the message has a TSIG record as the last record
-// in the additional section.
-func (dns *Msg) IsTsig() (ok bool) {
+// in the additional section. It returns the TSIG record found or nil.
+func (dns *Msg) IsTsig() *RR_TSIG {
 	if len(dns.Extra) > 0 {
-		return dns.Extra[len(dns.Extra)-1].Header().Rrtype == TypeTSIG
+		if dns.Extra[len(dns.Extra)-1].Header().Rrtype == TypeTSIG {
+			return dns.Extra[len(dns.Extra)-1].(*RR_TSIG)
+		}
 	}
-	return
+	return nil
 }
 
 // IsEdns0 checks if the message has a EDNS0 (OPT) record, any EDNS0
-// record in the additional section will do.
-func (dns *Msg) IsEdns0() (ok bool) {
+// record in the additional section will do. It returns the OPT record
+// found or nil.
+func (dns *Msg) IsEdns0() *RR_OPT {
 	for _, r := range dns.Extra {
 		if r.Header().Rrtype == TypeOPT {
-			return true
+			return r.(*RR_OPT)
 		}
 	}
-	return
+	return nil
 }
 
 // IsDomainName checks if s is a valid domainname, it returns
@@ -273,32 +220,8 @@ func IsDomainName(s string) (uint8, uint8, bool) { // copied from net package.
 
 // IsSubDomain checks if child is indeed a child of the parent.
 func IsSubDomain(parent, child string) bool {
-	// If the number of labels both domain name have
-	// in common equals the number of labels of parent,
-	// child is a subdomain of parent.
-	plabs := SplitLabels(parent)
-	clabs := SplitLabels(child)
-	if len(clabs) < len(plabs) {
-		// child is smaller than parent, reversed arguments?
-		return false
-	}
-	// Copied from CompareLabels to prevent another SplitLabels
-	n := 0
-	p := len(plabs) - 1
-	c := len(clabs) - 1
-	for {
-		if p < 0 || c < 0 {
-			break
-		}
-		if plabs[p] == clabs[c] {
-			n++
-		} else {
-			break
-		}
-		p--
-		c--
-	}
-	return n == len(plabs)
+	// Entire child is contained in parent
+	return CompareLabels(strings.ToLower(parent), strings.ToLower(child)) == LenLabels(parent)
 }
 
 // IsFqdn checks if a domain name is fully qualified.

@@ -3,7 +3,9 @@ package dns
 import (
 	"crypto/rsa"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -102,8 +104,8 @@ PrivateKey: WURgWHCcYIYUPWgeLmiPY2DJJk02vgrmTfitxgqcL4vwW7BOrbawVmVe0d9V94SR`
 	a, _ := NewRR("www.example.net. 3600 IN A 192.0.2.1")
 	sig := new(RR_RRSIG)
 	sig.Hdr = RR_Header{"example.net.", TypeRRSIG, ClassINET, 14400, 0}
-	sig.Expiration, _ = DateToTime("20100909102025")
-	sig.Inception, _ = DateToTime("20100812102025")
+	sig.Expiration, _ = StringToTime("20100909102025")
+	sig.Inception, _ = StringToTime("20100812102025")
 	sig.KeyTag = eckey.(*RR_DNSKEY).KeyTag()
 	sig.SignerName = eckey.(*RR_DNSKEY).Hdr.Name
 	sig.Algorithm = eckey.(*RR_DNSKEY).Algorithm
@@ -179,13 +181,13 @@ func TestDomainName(t *testing.T) {
 	dbuff := make([]byte, 40)
 
 	for _, ts := range tests {
-		if _, ok := PackDomainName(ts, dbuff, 0, nil, false); !ok {
+		if _, err := PackDomainName(ts, dbuff, 0, nil, false); err != nil {
 			t.Log("Not a valid domain name")
 			t.Fail()
 			continue
 		}
-		n, _, ok := UnpackDomainName(dbuff, 0)
-		if !ok {
+		n, _, err := UnpackDomainName(dbuff, 0)
+		if err != nil {
 			t.Log("Failed to unpack packed domain name")
 			t.Fail()
 			continue
@@ -380,14 +382,17 @@ func TestParseFailure(t *testing.T) {
 
 // A bit useless, how to use b.N?
 func BenchmarkZoneParsing(b *testing.B) {
+	b.StopTimer()
 	f, err := os.Open("t/miek.nl.signed_test")
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	to := ParseZone(f, "", "t/miek.nl.signed_test")
-	for x := range to {
-		x = x
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		to := ParseZone(f, "", "t/miek.nl.signed_test")
+		for _ = range to {
+		}
 	}
 }
 
@@ -518,8 +523,8 @@ func TestRfc1982(t *testing.T) {
 	// fall in the current 68 year span
 	strtests := []string{"20120525134203", "19700101000000", "20380119031408"}
 	for _, v := range strtests {
-		if x, _ := DateToTime(v); v != TimeToDate(x) {
-			t.Logf("1982 arithmetic string failure %s (%s:%d)", v, TimeToDate(x), x)
+		if x, _ := StringToTime(v); v != TimeToString(x) {
+			t.Logf("1982 arithmetic string failure %s (%s:%d)", v, TimeToString(x), x)
 			t.Fail()
 		}
 	}
@@ -529,8 +534,8 @@ func TestRfc1982(t *testing.T) {
 		1<<32 - 1: "21060207062815",
 	}
 	for i, v := range inttests {
-		if TimeToDate(i) != v {
-			t.Logf("1982 arithmetic int failure %d:%s (%s)", i, v, TimeToDate(i))
+		if TimeToString(i) != v {
+			t.Logf("1982 arithmetic int failure %d:%s (%s)", i, v, TimeToString(i))
 			t.Fail()
 		}
 	}
@@ -545,8 +550,8 @@ func TestRfc1982(t *testing.T) {
 		"29210101121212": "21040522212236",
 	}
 	for from, to := range future {
-		x, _ := DateToTime(from)
-		y := TimeToDate(x)
+		x, _ := StringToTime(from)
+		y := TimeToString(x)
 		if y != to {
 			t.Logf("1982 arithmetic future failure %s:%s (%s)", from, to, y)
 			t.Fail()
@@ -579,5 +584,44 @@ func ExampleGenerate() {
 		if x.Error == nil {
 			fmt.Printf("%s\n", x.RR.String())
 		}
+	}
+}
+
+func TestSRVPacking(t *testing.T) {
+	msg := Msg{}
+
+	things := []string{"1.2.3.4:8484",
+		"45.45.45.45:8484",
+		"84.84.84.84:8484",
+	}
+
+	for i, n := range things {
+		h, p, err := net.SplitHostPort(n)
+		if err != nil {
+			continue
+		}
+		port := 8484
+		tmp, err := strconv.Atoi(p)
+		if err == nil {
+			port = tmp
+		}
+
+		rr := &RR_SRV{
+			Hdr: RR_Header{Name: "somename.",
+				Rrtype: TypeSRV,
+				Class:  ClassINET,
+				Ttl:    5},
+			Priority: uint16(i),
+			Weight:   5,
+			Port:     uint16(port),
+			Target:   h + ".",
+		}
+
+		msg.Answer = append(msg.Answer, rr)
+	}
+
+	_, err := msg.Pack(nil)
+	if err != nil {
+		t.Fatalf("Couldn't pack %v\n", msg)
 	}
 }

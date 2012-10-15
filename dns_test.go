@@ -14,13 +14,13 @@ func TestPackUnpack(t *testing.T) {
 	key.PublicKey = "AwEAAaHIwpx3w4VHKi6i1LHnTaWeHCL154Jug0Rtc9ji5qwPXpBo6A5sRv7cSsPQKPIwxLpyCrbJ4mr2L0EPOdvP6z6YfljK2ZmTbogU9aSU2fiq/4wjxbdkLyoDVgtO+JsxNN4bjr4WcWhsmk1Hg93FV9ZpkWb0Tbad8DFqNDzr//kZ"
 
 	out.Answer[0] = key
-	msg, ok := out.Pack(nil)
-	if !ok {
+	msg, err := out.Pack(nil)
+	if err != nil {
 		t.Log("Failed to pack msg with DNSKEY")
 		t.Fail()
 	}
 	in := new(Msg)
-	if !in.Unpack(msg) {
+	if in.Unpack(msg) != nil {
 		t.Log("Failed to unpack msg with DNSKEY")
 		t.Fail()
 	}
@@ -32,13 +32,13 @@ func TestPackUnpack(t *testing.T) {
 	sig.Hdr = RR_Header{Name: "miek.nl.", Rrtype: TypeRRSIG, Class: ClassINET, Ttl: 3600}
 
 	out.Answer[0] = sig
-	msg, ok = out.Pack(nil)
-	if !ok {
+	msg, err = out.Pack(nil)
+	if err != nil {
 		t.Log("Failed to pack msg with RRSIG")
 		t.Fail()
 	}
 
-	if !in.Unpack(msg) {
+	if in.Unpack(msg) != nil {
 		t.Log("Failed to unpack msg with RRSIG")
 		t.Fail()
 	}
@@ -59,8 +59,8 @@ func TestPackUnpack2(t *testing.T) {
 
 	m.Extra[0] = x
 	m.Answer[0] = rr
-	_, ok := m.Pack(nil)
-	if !ok {
+	_, err := m.Pack(nil)
+	if err != nil {
 		t.Log("Packing failed")
 		t.Fail()
 		return
@@ -75,6 +75,8 @@ func TestBailiwick(t *testing.T) {
 	for parent, child := range yes {
 		if !IsSubDomain(parent, child) {
 			t.Logf("%s should be child of %s\n", child, parent)
+			t.Logf("comparelabels %d", CompareLabels(parent, child))
+			t.Logf("lenlabels %d %d", LenLabels(parent), LenLabels(child))
 			t.Fail()
 		}
 	}
@@ -85,6 +87,8 @@ func TestBailiwick(t *testing.T) {
 	for parent, child := range no {
 		if IsSubDomain(parent, child) {
 			t.Logf("%s should not be child of %s\n", child, parent)
+			t.Logf("comparelabels %d", CompareLabels(parent, child))
+			t.Logf("lenlabels %d %d", LenLabels(parent), LenLabels(child))
 			t.Fail()
 		}
 	}
@@ -102,9 +106,43 @@ func TestPack(t *testing.T) {
 			t.Fail()
 			continue
 		}
-		if _, ok := m.Pack(nil); !ok {
+		if _, err := m.Pack(nil); err != nil {
 			t.Log("Packing failed")
 			t.Fail()
 		}
+	}
+	x := new(Msg)
+	ns, _ := NewRR("pool.ntp.org.   390 IN  NS  a.ntpns.org")
+	ns.(*RR_NS).Ns = "a.ntpns.org"
+	x.Ns = append(m.Ns, ns)
+	x.Ns = append(m.Ns, ns)
+	x.Ns = append(m.Ns, ns)
+	// This crashes due to the fact the a.ntpns.org isn't a FQDN
+	// How to recover() from a remove panic()?
+	if _, err := x.Pack(nil); err == nil {
+		t.Log("Packing should fail")
+		t.Fail()
+	}
+	x.Answer = make([]RR, 1)
+	x.Answer[0], err = NewRR(rr[0])
+	if _, err := x.Pack(nil); err == nil {
+		t.Log("Packing should fail")
+		t.Fail()
+	}
+	x.Question = make([]Question, 1)
+	x.Question[0] = Question{";sd#eddddséâèµâââ¥âxzztsestxssweewwsssstx@s@Zåµe@cn.pool.ntp.org.", TypeA, ClassINET}
+	if _, err := x.Pack(nil); err == nil {
+		t.Log("Packing should fail")
+		t.Fail()
+	}
+}
+
+func TestCompressLenght(t *testing.T) {
+	m := new(Msg)
+	m.SetQuestion("miek.nl", TypeMX)
+	ul := m.Len()
+	m.Compress = true
+	if ul != m.Len() {
+		t.Fatalf("Should be equal")
 	}
 }

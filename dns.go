@@ -3,21 +3,20 @@
 // license that can be found in the LICENSE file.
 // Extended and bugfixes by Miek Gieben. Copyright 2010-2012.
 
-// DOMAIN NAME SYSTEM
-//
 // Package dns implements a full featured interface to the Domain Name System.
 // Server- and client-side programming is supported.
 // The package allows complete control over what is send out to the DNS. The package
 // API follows the less-is-more principle, by presenting a small, clean interface.
 //
-// The package dns supports (async) querying/replying, incoming/outgoing Axfr/Ixfr, 
+// The package dns supports (asynchronous) querying/replying, incoming/outgoing AXFR/IXFR, 
 // TSIG, EDNS0, dynamic updates, notifies and DNSSEC validation/signing.
-// Note that domain names MUST be full qualified, before sending them.
+// Note that domain names MUST be fully qualified, before sending them, unqualified
+// names in a message will result in a packing failure.
 //
 // Resource records are native types. They are not stored in wire format.
 // Basic usage pattern for creating a new resource record:
 //
-//      r := new(dns.RR_TXT)
+//      r := new(dns.RR_MX)
 //      r.Hdr = dns.RR_Header{Name: "miek.nl.", Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: 3600}
 //      r.Pref = 10
 //      r.Mx = "mx.miek.nl."
@@ -33,7 +32,6 @@
 // Or even:
 //
 //      mx, err := dns.NewRR("$ORIGIN nl.\nmiek 1H IN MX 10 mx.miek")
-// 
 //
 // In the DNS messages are exchanged, these messages contain resource
 // records (sets).  Use pattern for creating a message:
@@ -41,14 +39,18 @@
 //      m := dns.new(Msg)
 //      m.SetQuestion("miek.nl.", dns.TypeMX)
 //
+// Or when not certain if the domain name is fully qualified:
+//
+//	m.SetQuestion(dns.Fqdn("miek.nl"), dns.TypeMX)
+//
 // The message m is now a message with the question section set to ask
 // the MX records for the miek.nl. zone.
 //
 // The following is slightly more verbose, but more flexible:
 //
 //      m1 := new(dns.Msg)
-//      m1.MsgHdr.Id = Id()
-//      m1.MsgHdr.RecursionDesired = false
+//      m1.Id = Id()
+//      m1.RecursionDesired = true
 //      m1.Question = make([]Question, 1)
 //      m1.Question[0] = dns.Question{"miek.nl.", dns.TypeMX, dns.ClassINET}
 //
@@ -59,22 +61,32 @@
 //      c := new(Client)
 //      in, err := c.Exchange(m1, "127.0.0.1:53")
 //
-// An asynchronous query is also possible, setting up is more elaborate then
-// a synchronous query. 
+// An asynchronous query is also possible, see client.Do and client.DoRtt.
+//
+// From a birds eye view a dns message consists out of four sections.
+// The question section: in.Question, the answer section: in.Answer,
+// the authority section: in.Ns and the additional section: in.Extra.
+//
+// Each of these sections (except the Question section) contain a []RR. Basic
+// use pattern for accessing the rdata of a TXT RR as the first RR in 
+// the Answer section:
+//
+//	if t, ok := in.Answer[0].(*RR_TXT); ok {
+//		// do something with t.Txt
+//	}
 package dns
 
 import (
 	"net"
 	"strconv"
-	"time"
 )
 
 const (
-	Year68         = 1 << 31 // For RFC1982 (Serial Arithmetic) calculations in 32 bits.
+	year68         = 1 << 31 // For RFC1982 (Serial Arithmetic) calculations in 32 bits.
 	DefaultMsgSize = 4096    // Standard default for larger than 512 packets.
-	UDPMsgSize     = 512     // Default buffer size for servers receiving UDP packets.
+	udpMsgSize     = 512     // Default buffer size for servers receiving UDP packets.
 	MaxMsgSize     = 65536   // Largest possible DNS packet.
-	DefaultTtl     = 3600    // Default TTL.
+	defaultTtl     = 3600    // Default TTL.
 )
 
 // Error represents a DNS error
@@ -90,9 +102,9 @@ func (e *Error) Error() string {
 		return "dns: <nil>"
 	}
 	if e.Name == "" {
-		return e.Err
+		return "dns: " + e.Err
 	}
-	return e.Name + ": " + e.Err
+	return "dns: " + e.Name + ": " + e.Err
 
 }
 
@@ -109,19 +121,8 @@ type RR interface {
 	Copy() RR
 }
 
-// Exchange is used in (asynchronous) communication with the resolver. If the 
-// client has trust anchors configured the Nxdomain, Secure and Bogus settings
-// are derived from those anchors.
-type Exchange struct {
-	Request    *Msg          // the question sent
-	Reply      *Msg          // the answer to the question that was sent
-	Rtt        time.Duration // round trip time
-	RemoteAddr net.Addr      // address of the server
-	Error      error         // if something went wrong, this contains the error
-}
-
 // DNS resource records.
-// There are many types of messages,
+// There are many types of RRs,
 // but they all share the same header.
 type RR_Header struct {
 	Name     string `dns:"cdomain-name"`
@@ -185,6 +186,7 @@ func (h *RR_Header) Len() int {
 	return l
 }
 
+// find best matching pattern for zone
 func zoneMatch(pattern, zone string) (ok bool) {
 	if len(pattern) == 0 {
 		return
@@ -192,7 +194,7 @@ func zoneMatch(pattern, zone string) (ok bool) {
 	if len(zone) == 0 {
 		zone = "."
 	}
-	pattern = Fqdn(pattern)
+	// pattern = Fqdn(pattern) // should already be a fqdn
 	zone = Fqdn(zone)
 	i := 0
 	for {
