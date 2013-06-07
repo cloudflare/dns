@@ -1,12 +1,12 @@
 // Copyright 2009 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+// Extensions of the original work are copyright (c) 2011 Miek Gieben
 
 package dns
 
 import (
 	"bufio"
-	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -19,17 +19,17 @@ type ClientConfig struct {
 	Port     string   // what port to use
 	Ndots    int      // number of dots in name to trigger absolute lookup
 	Timeout  int      // seconds before giving up on packet
-	Attempts int      // lost packets before giving up on server
+	Attempts int      // lost packets before giving up on server, not used in the package dns
 }
 
 // ClientConfigFromFile parses a resolv.conf(5) like file and returns
 // a *ClientConfig.
 func ClientConfigFromFile(conf string) (*ClientConfig, error) {
 	file, err := os.Open(conf)
-	defer file.Close()
 	if err != nil {
 		return nil, err
 	}
+	defer file.Close()
 	c := new(ClientConfig)
 	b := bufio.NewReader(file)
 	c.Servers = make([]string, 0)
@@ -50,13 +50,14 @@ func ClientConfigFromFile(conf string) (*ClientConfig, error) {
 				// just an IP address.  Otherwise we need DNS
 				// to look it up.
 				name := f[1]
-				switch x := net.ParseIP(name); true {
-				case x.To4() != nil:
-					c.Servers = append(c.Servers, name)
-				case x.To16() != nil:
-					name = "[" + name + "]"
-					c.Servers = append(c.Servers, name)
-				}
+				// Don't use this. net.JoinHostPort will fix this for you
+				//				switch x := net.ParseIP(name); true {
+				//				case x.To4() != nil:
+				//					c.Servers = append(c.Servers, name)
+				//				case x.To16() != nil:
+				//					name = "[" + name + "]"
+				c.Servers = append(c.Servers, name)
+				//				}
 			}
 
 		case "domain": // set search path to just this domain

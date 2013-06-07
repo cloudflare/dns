@@ -1,3 +1,7 @@
+// Copyright 2011 Miek Gieben. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package dns
 
 import (
@@ -10,8 +14,8 @@ func HelloServer(w ResponseWriter, req *Msg) {
 	m.SetReply(req)
 
 	m.Extra = make([]RR, 1)
-	m.Extra[0] = &RR_TXT{Hdr: RR_Header{Name: m.Question[0].Name, Rrtype: TypeTXT, Class: ClassINET, Ttl: 0}, Txt: []string{"Hello world"}}
-	w.Write(m)
+	m.Extra[0] = &TXT{Hdr: RR_Header{Name: m.Question[0].Name, Rrtype: TypeTXT, Class: ClassINET, Ttl: 0}, Txt: []string{"Hello world"}}
+	w.WriteMsg(m)
 }
 
 func AnotherHelloServer(w ResponseWriter, req *Msg) {
@@ -19,8 +23,8 @@ func AnotherHelloServer(w ResponseWriter, req *Msg) {
 	m.SetReply(req)
 
 	m.Extra = make([]RR, 1)
-	m.Extra[0] = &RR_TXT{Hdr: RR_Header{Name: m.Question[0].Name, Rrtype: TypeTXT, Class: ClassINET, Ttl: 0}, Txt: []string{"Hello example"}}
-	w.Write(m)
+	m.Extra[0] = &TXT{Hdr: RR_Header{Name: m.Question[0].Name, Rrtype: TypeTXT, Class: ClassINET, Ttl: 0}, Txt: []string{"Hello example"}}
+	w.WriteMsg(m)
 }
 
 func TestServing(t *testing.T) {
@@ -38,15 +42,15 @@ func TestServing(t *testing.T) {
 	m := new(Msg)
 
 	m.SetQuestion("miek.nl.", TypeTXT)
-	r, _ := c.Exchange(m, "127.0.0.1:8053")
-	txt := r.Extra[0].(*RR_TXT).Txt[0]
+	r, _, _ := c.Exchange(m, "127.0.0.1:8053")
+	txt := r.Extra[0].(*TXT).Txt[0]
 	if txt != "Hello world" {
 		t.Log("Unexpected result for miek.nl", txt, "!= Hello world")
 		t.Fail()
 	}
 	m.SetQuestion("example.com.", TypeTXT)
-	r, _ = c.Exchange(m, "127.0.0.1:8053")
-	txt = r.Extra[0].(*RR_TXT).Txt[0]
+	r, _, _ = c.Exchange(m, "127.0.0.1:8053")
+	txt = r.Extra[0].(*TXT).Txt[0]
 	if txt != "Hello example" {
 		t.Log("Unexpected result for example.com", txt, "!= Hello example")
 		t.Fail()
@@ -94,5 +98,15 @@ func TestDotAsCatchAllWildcard(t *testing.T) {
 	handler = mux.match("boe.", TypeTXT)
 	if handler == nil {
 		t.Error("boe. match failed")
+	}
+}
+
+func TestRootServer(t *testing.T) {
+	mux := NewServeMux()
+	mux.Handle(".", HandlerFunc(HelloServer))
+
+	handler := mux.match(".", TypeNS)
+	if handler == nil {
+		t.Error("root match failed")
 	}
 }

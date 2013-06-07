@@ -1,3 +1,7 @@
+// Copyright 2011 Miek Gieben. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package dns
 
 import (
@@ -17,12 +21,12 @@ const _FORMAT = "Private-key-format: v1.3\n"
 type PrivateKey interface{}
 
 // Generate generates a DNSKEY of the given bit size.
-// The public part is put inside the DNSKEY record. 
+// The public part is put inside the DNSKEY record.
 // The Algorithm in the key must be set as this will define
 // what kind of DNSKEY will be generated.
 // The ECDSA algorithms imply a fixed keysize, in that case
 // bits should be set to the size of the algorithm.
-func (r *RR_DNSKEY) Generate(bits int) (PrivateKey, error) {
+func (r *DNSKEY) Generate(bits int) (PrivateKey, error) {
 	switch r.Algorithm {
 	case DSA, DSANSEC3SHA1:
 		if bits != 1024 {
@@ -88,12 +92,12 @@ func (r *RR_DNSKEY) Generate(bits int) (PrivateKey, error) {
 }
 
 // PrivateKeyString converts a PrivateKey to a string. This
-// string has the same format as the private-key-file of BIND9 (Private-key-format: v1.3). 
-// It needs some info from the key (hashing, keytag), so its a method of the RR_DNSKEY.
-func (r *RR_DNSKEY) PrivateKeyString(p PrivateKey) (s string) {
+// string has the same format as the private-key-file of BIND9 (Private-key-format: v1.3).
+// It needs some info from the key (hashing, keytag), so its a method of the DNSKEY.
+func (r *DNSKEY) PrivateKeyString(p PrivateKey) (s string) {
 	switch t := p.(type) {
 	case *rsa.PrivateKey:
-		algorithm := strconv.Itoa(int(r.Algorithm)) + " (" + Alg_str[r.Algorithm] + ")"
+		algorithm := strconv.Itoa(int(r.Algorithm)) + " (" + AlgorithmToString[r.Algorithm] + ")"
 		modulus := unpackBase64(t.PublicKey.N.Bytes())
 		e := big.NewInt(int64(t.PublicKey.E))
 		publicExponent := unpackBase64(e.Bytes())
@@ -125,13 +129,13 @@ func (r *RR_DNSKEY) PrivateKeyString(p PrivateKey) (s string) {
 			"Exponent2: " + exponent2 + "\n" +
 			"Coefficient: " + coefficient + "\n"
 	case *ecdsa.PrivateKey:
-		algorithm := strconv.Itoa(int(r.Algorithm)) + " (" + Alg_str[r.Algorithm] + ")"
+		algorithm := strconv.Itoa(int(r.Algorithm)) + " (" + AlgorithmToString[r.Algorithm] + ")"
 		private := unpackBase64(t.D.Bytes())
 		s = _FORMAT +
 			"Algorithm: " + algorithm + "\n" +
 			"PrivateKey: " + private + "\n"
 	case *dsa.PrivateKey:
-		algorithm := strconv.Itoa(int(r.Algorithm)) + " (" + Alg_str[r.Algorithm] + ")"
+		algorithm := strconv.Itoa(int(r.Algorithm)) + " (" + AlgorithmToString[r.Algorithm] + ")"
 		prime := unpackBase64(t.PublicKey.Parameters.P.Bytes())
 		subprime := unpackBase64(t.PublicKey.Parameters.Q.Bytes())
 		base := unpackBase64(t.PublicKey.Parameters.G.Bytes())

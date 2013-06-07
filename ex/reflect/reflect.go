@@ -1,3 +1,7 @@
+// Copyright 2011 Miek Gieben. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Reflect is a small name server which sends back the IP address of its client, the
 // recursive resolver. 
 // When queried for type A (resp. AAAA), it sends back the IPv4 (resp. v6) address.
@@ -72,25 +76,36 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 		v4 = a.To4() != nil
 	}
 
+	/*
+	if o := r.IsEdns0(); o != nil {
+		for _, s := range o.Option {
+			switch e := s.(type) {
+			case *dns.EDNS0_SUBNET:
+				log.Printf("Edns0 subnet %s", e.Address)
+			}
+		}
+	}
+	*/
+
 	if v4 {
-		rr = new(dns.RR_A)
-		rr.(*dns.RR_A).Hdr = dns.RR_Header{Name: dom, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}
-		rr.(*dns.RR_A).A = a.To4()
+		rr = new(dns.A)
+		rr.(*dns.A).Hdr = dns.RR_Header{Name: dom, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}
+		rr.(*dns.A).A = a.To4()
 	} else {
-		rr = new(dns.RR_AAAA)
-		rr.(*dns.RR_AAAA).Hdr = dns.RR_Header{Name: dom, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 0}
-		rr.(*dns.RR_AAAA).AAAA = a
+		rr = new(dns.AAAA)
+		rr.(*dns.AAAA).Hdr = dns.RR_Header{Name: dom, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 0}
+		rr.(*dns.AAAA).AAAA = a
 	}
 
-	t := new(dns.RR_TXT)
+	t := new(dns.TXT)
 	t.Hdr = dns.RR_Header{Name: dom, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0}
 	t.Txt = []string{str}
 
 	switch r.Question[0].Qtype {
 	case dns.TypeAXFR:
-		c := make(chan *dns.XfrToken)
+		c := make(chan *dns.Envelope)
 		var e *error
-		if err := dns.XfrSend(w, r, c, e); err != nil {
+		if err := dns.TransferOut(w, r, c, e); err != nil {
 			close(c)
 			return
 		}
@@ -100,7 +115,7 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 			7200 
 			604800 
 			3600)`)
-		c <- &dns.XfrToken{RR: []dns.RR{soa, t, rr, soa}}
+		c <- &dns.Envelope{RR: []dns.RR{soa, t, rr, soa}}
 		close(c)
 		w.Hijack()
 		// w.Close() // Client closes
@@ -117,7 +132,7 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 
 	if r.IsTsig() != nil {
 		if w.TsigStatus() == nil {
-			m.SetTsig(r.Extra[len(r.Extra)-1].(*dns.RR_TSIG).Hdr.Name, dns.HmacMD5, 300, time.Now().Unix())
+			m.SetTsig(r.Extra[len(r.Extra)-1].(*dns.TSIG).Hdr.Name, dns.HmacMD5, 300, time.Now().Unix())
 		} else {
 			println("Status", w.TsigStatus().Error())
 		}
@@ -125,7 +140,7 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 	if *printf {
 		fmt.Printf("%v\n", m.String())
 	}
-	w.Write(m)
+	w.WriteMsg(m)
 }
 
 func serve(net, name, secret string) {
@@ -156,7 +171,7 @@ func main() {
 	flag.Parse()
 	if *tsig != "" {
 		a := strings.SplitN(*tsig, ":", 2)
-		name, secret = dns.Fqdn(a[0]), a[1]	// fqdn the name, which everybody forgets...
+		name, secret = dns.Fqdn(a[0]), a[1] // fqdn the name, which everybody forgets...
 	}
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
@@ -179,7 +194,7 @@ func main() {
 forever:
 	for {
 		select {
-		case s:=<-sig:
+		case s := <-sig:
 			fmt.Printf("Signal (%d) received, stopping\n", s)
 			break forever
 		}

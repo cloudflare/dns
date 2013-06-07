@@ -1,3 +1,11 @@
+// Copyright 2011 Miek Gieben. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Q is a small utility which acts and behaves like 'dig' from BIND.
+// It is meant to stay lean and mean, while having a bunch of handy
+// features, like -check which checks if a packet is correctly signed (without
+// checking the chain of trust).
 package main
 
 import (
@@ -14,16 +22,16 @@ import (
 // TODO: serial in ixfr
 
 var (
-	dnskey *dns.RR_DNSKEY
+	dnskey *dns.DNSKEY
 	short  *bool
 )
 
 func main() {
 	short = flag.Bool("short", false, "abbreviate long DNSSEC records")
-
 	dnssec := flag.Bool("dnssec", false, "request DNSSEC records")
 	query := flag.Bool("question", false, "show question")
 	check := flag.Bool("check", false, "check internal DNSSEC consistency")
+	raw := flag.Bool("raw", false, "do not strip 'http://' from the qname")
 	six := flag.Bool("6", false, "use IPv6 only")
 	four := flag.Bool("4", false, "use IPv4 only")
 	anchor := flag.String("anchor", "", "use the DNSKEY in this file for interal DNSSEC consistency")
@@ -39,12 +47,10 @@ func main() {
 	client := flag.String("client", "", "set edns client-subnet option")
 	//serial := flag.Int("serial", 0, "perform an IXFR with this serial")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [@server] [qtype] [qclass] [name ...]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s [options] [@server] [qtype] [qclass] [name ...]\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 
-	conf, _ := dns.ClientConfigFromFile("/etc/resolv.conf")
-	nameserver := "@" + conf.Servers[0]
 	qtype := uint16(0)
 	qclass := uint16(dns.ClassINET)
 	var qname []string
@@ -59,12 +65,14 @@ func main() {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failure to read an RR from %s: %s\n", *anchor, err.Error())
 		}
-		if k, ok := r.(*dns.RR_DNSKEY); !ok {
+		if k, ok := r.(*dns.DNSKEY); !ok {
 			fmt.Fprintf(os.Stderr, "No DNSKEY read from %s\n", *anchor)
 		} else {
 			dnskey = k
 		}
 	}
+
+	var nameserver string
 
 Flags:
 	for i := 0; i < flag.NArg(); i++ {
@@ -75,12 +83,12 @@ Flags:
 		}
 		// First class, then type, to make ANY queries possible
 		// And if it looks like type, it is a type
-		if k, ok := dns.Str_rr[strings.ToUpper(flag.Arg(i))]; ok {
+		if k, ok := dns.StringToType[strings.ToUpper(flag.Arg(i))]; ok {
 			qtype = k
 			continue Flags
 		}
 		// If it looks like a class, it is a class
-		if k, ok := dns.Str_class[strings.ToUpper(flag.Arg(i))]; ok {
+		if k, ok := dns.StringToClass[strings.ToUpper(flag.Arg(i))]; ok {
 			qclass = k
 			continue Flags
 		}
@@ -105,20 +113,27 @@ Flags:
 		qtype = dns.TypeA
 	}
 
-	nameserver = string([]byte(nameserver)[1:]) // chop off @
-	if i := net.ParseIP(nameserver); i != nil {
-		switch {
-		case i.To4() != nil:
-			// it's a v4 address
-			nameserver += ":" + strconv.Itoa(*port)
-		case i.To16() != nil:
-			// v6 address
-			nameserver = "[" + nameserver + "]:" + strconv.Itoa(*port)
+	if len(nameserver) == 0 {
+		conf, err := dns.ClientConfigFromFile("/etc/resolv.conf")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
 		}
+		nameserver = "@" + conf.Servers[0]
+	}
+
+	nameserver = string([]byte(nameserver)[1:]) // chop off @
+	// if the nameserver is from /etc/resolv.conf the [ and ] are already
+	// added, thereby breaking net.ParseIP. Check for this and don't
+	// fully qualify such a name
+	if nameserver[0] == '[' && nameserver[len(nameserver)-1] == ']' {
+		nameserver = nameserver[1 : len(nameserver)-1]
+	}
+	if i := net.ParseIP(nameserver); i != nil {
+		nameserver = net.JoinHostPort(nameserver, strconv.Itoa(*port))
 	} else {
 		nameserver = dns.Fqdn(nameserver) + ":" + strconv.Itoa(*port)
 	}
-	// We use the async query handling, just to show how it is to be used.
 	c := new(dns.Client)
 	if *tcp {
 		c.Net = "tcp"
@@ -146,7 +161,7 @@ Flags:
 	m.Question = make([]dns.Question, 1)
 
 	if *dnssec || *nsid || *client != "" {
-		o := new(dns.RR_OPT)
+		o := new(dns.OPT)
 		o.Hdr.Name = "."
 		o.Hdr.Rrtype = dns.TypeOPT
 		if *dnssec {
@@ -180,13 +195,16 @@ Flags:
 		m.Extra = append(m.Extra, o)
 	}
 
-	for i, v := range qname {
+	for _, v := range qname {
+		if !*raw && strings.HasPrefix(v, "http://") {
+			v = v[7:]
+			if v[len(v)-1] == '/' {
+				v = v[:len(v)-1]
+			}
+		}
+
 		m.Question[0] = dns.Question{dns.Fqdn(v), qtype, qclass}
 		m.Id = dns.Id()
-		if *query {
-			fmt.Printf("%s", m.String())
-			fmt.Printf("\n;; size: %d bytes\n\n", m.Len())
-		}
 		// Add tsig
 		if *tsig != "" {
 			if algo, name, secret, ok := tsigKeyParse(*tsig); ok {
@@ -197,6 +215,10 @@ Flags:
 				return
 			}
 		}
+		if *query {
+			fmt.Printf("%s", m.String())
+			fmt.Printf("\n;; size: %d bytes\n\n", m.Len())
+		}
 		if qtype == dns.TypeAXFR {
 			c.Net = "tcp"
 			doXfr(c, m, nameserver)
@@ -206,66 +228,50 @@ Flags:
 			doXfr(c, m, nameserver)
 			continue
 		}
-
-		c.DoRtt(m, nameserver, nil, func(m, r *dns.Msg, rtt time.Duration, e error, data interface{}) {
-			defer func() {
-				if i == len(qname)-1 {
-					os.Exit(0)
-				}
-			}()
-		Redo:
-			if e != nil {
-				fmt.Printf(";; %s\n", e.Error())
-				return
-			}
-			if r.Rcode != dns.RcodeSuccess {
-				return
-			}
-			if r.Id != m.Id {
-				fmt.Fprintf(os.Stderr, "Id mismatch\n")
-				return
-			}
-			if r.MsgHdr.Truncated && *fallback {
-				if c.Net != "tcp" {
-					if !*dnssec {
-						fmt.Printf(";; Truncated, trying %d bytes bufsize\n", dns.DefaultMsgSize)
-						o := new(dns.RR_OPT)
-						o.Hdr.Name = "."
-						o.Hdr.Rrtype = dns.TypeOPT
-						o.SetUDPSize(dns.DefaultMsgSize)
-						m.Extra = append(m.Extra, o)
-						r, rtt, e = c.ExchangeRtt(m, nameserver)
-						*dnssec = true
-						goto Redo
-					} else {
-						// First EDNS, then TCP
-						fmt.Printf(";; Truncated, trying TCP\n")
-						c.Net = "tcp"
-						r, rtt, e = c.ExchangeRtt(m, nameserver)
-						goto Redo
-					}
+		r, rtt, e := c.Exchange(m, nameserver)
+	Redo:
+		if e != nil {
+			fmt.Printf(";; %s\n", e.Error())
+			continue
+		}
+		if r.Id != m.Id {
+			fmt.Fprintf(os.Stderr, "Id mismatch\n")
+			return
+		}
+		if r.MsgHdr.Truncated && *fallback {
+			if c.Net != "tcp" {
+				if !*dnssec {
+					fmt.Printf(";; Truncated, trying %d bytes bufsize\n", dns.DefaultMsgSize)
+					o := new(dns.OPT)
+					o.Hdr.Name = "."
+					o.Hdr.Rrtype = dns.TypeOPT
+					o.SetUDPSize(dns.DefaultMsgSize)
+					m.Extra = append(m.Extra, o)
+					r, rtt, e = c.Exchange(m, nameserver)
+					*dnssec = true
+					goto Redo
+				} else {
+					// First EDNS, then TCP
+					fmt.Printf(";; Truncated, trying TCP\n")
+					c.Net = "tcp"
+					r, rtt, e = c.Exchange(m, nameserver)
+					goto Redo
 				}
 			}
-			if r.MsgHdr.Truncated && !*fallback {
-				fmt.Printf(";; Truncated\n")
-			}
-			if *check {
-				sigCheck(r, nameserver, *tcp)
-				nsecCheck(r)
-			}
-			if *short {
-				r = shortMsg(r)
-			}
+		}
+		if r.MsgHdr.Truncated && !*fallback {
+			fmt.Printf(";; Truncated\n")
+		}
+		if *check {
+			sigCheck(r, nameserver, *tcp)
+		}
+		if *short {
+			r = shortMsg(r)
+		}
 
-			fmt.Printf("%v", r)
-			fmt.Printf("\n;; query time: %.3d µs, server: %s(%s), size: %d bytes\n", rtt/1e3, nameserver, c.Net, r.Size)
-		})
+		fmt.Printf("%v", r)
+		fmt.Printf("\n;; query time: %.3d µs, server: %s(%s), size: %d bytes\n", rtt/1e3, nameserver, c.Net, r.Len())
 	}
-	if qtype != dns.TypeAXFR && qtype != dns.TypeIXFR {
-		// xfr don't start any goroutines
-		select {}
-	}
-
 }
 
 func tsigKeyParse(s string) (algo, name, secret string, ok bool) {
@@ -276,7 +282,7 @@ func tsigKeyParse(s string) (algo, name, secret string, ok bool) {
 	case 3:
 		switch s1[0] {
 		case "hmac-md5":
-			return "hmac-md5.sig-alg.reg.int.", s1[0], s1[1], true
+			return "hmac-md5.sig-alg.reg.int.", s1[1], s1[2], true
 		case "hmac-sha1":
 			return "hmac-sha1.", s1[1], s1[2], true
 		case "hmac-sha256":
@@ -287,66 +293,31 @@ func tsigKeyParse(s string) (algo, name, secret string, ok bool) {
 }
 
 func sectionCheck(set []dns.RR, server string, tcp bool) {
-	var key *dns.RR_DNSKEY
+	var key *dns.DNSKEY
 	for _, rr := range set {
 		if rr.Header().Rrtype == dns.TypeRRSIG {
-			rrset := getRRset(set, rr.Header().Name, rr.(*dns.RR_RRSIG).TypeCovered)
+			rrset := getRRset(set, rr.Header().Name, rr.(*dns.RRSIG).TypeCovered)
 			if dnskey == nil {
-				key = getKey(rr.(*dns.RR_RRSIG).SignerName, rr.(*dns.RR_RRSIG).KeyTag, server, tcp)
+				key = getKey(rr.(*dns.RRSIG).SignerName, rr.(*dns.RRSIG).KeyTag, server, tcp)
 			} else {
 				key = dnskey
 			}
 			if key == nil {
-				fmt.Printf(";? DNSKEY %s/%d not found\n", rr.(*dns.RR_RRSIG).SignerName, rr.(*dns.RR_RRSIG).KeyTag)
+				fmt.Printf(";? DNSKEY %s/%d not found\n", rr.(*dns.RRSIG).SignerName, rr.(*dns.RRSIG).KeyTag)
 				continue
 			}
 			where := "net"
 			if dnskey != nil {
 				where = "disk"
 			}
-			if err := rr.(*dns.RR_RRSIG).Verify(key, rrset); err != nil {
+			if err := rr.(*dns.RRSIG).Verify(key, rrset); err != nil {
 				fmt.Printf(";- Bogus signature, %s does not validate (DNSKEY %s/%d/%s) [%s]\n",
-					shortSig(rr.(*dns.RR_RRSIG)), key.Header().Name, key.KeyTag(), where, err.Error())
+					shortSig(rr.(*dns.RRSIG)), key.Header().Name, key.KeyTag(), where, err.Error())
 			} else {
-				fmt.Printf(";+ Secure signature, %s validates (DNSKEY %s/%d/%s)\n", shortSig(rr.(*dns.RR_RRSIG)), key.Header().Name, key.KeyTag(), where)
+				fmt.Printf(";+ Secure signature, %s validates (DNSKEY %s/%d/%s)\n", shortSig(rr.(*dns.RRSIG)), key.Header().Name, key.KeyTag(), where)
 			}
 		}
 	}
-}
-
-// Check if we have nsec3 records and if so, check them
-func nsecCheck(in *dns.Msg) {
-	for _, r := range in.Answer {
-		if r.Header().Rrtype == dns.TypeNSEC3 {
-			goto Check
-		}
-	}
-	for _, r := range in.Ns {
-		if r.Header().Rrtype == dns.TypeNSEC3 {
-			goto Check
-		}
-	}
-	for _, r := range in.Extra {
-		if r.Header().Rrtype == dns.TypeNSEC3 {
-			goto Check
-		}
-	}
-	return
-Check:
-	/*
-		w, err := in.Nsec3Verify(in.Question[0])
-		switch w {
-		case dns.NSEC3_NXDOMAIN:
-			fmt.Printf(";+ [beta] Correct denial of existence (NSEC3/NXDOMAIN)\n")
-		case dns.NSEC3_NODATA:
-			fmt.Printf(";+ [beta] Correct denial of existence (NSEC3/NODATA)\n")
-		default:
-			// w == 0
-			if err != nil {
-				fmt.Printf(";- [beta] Incorrect denial of existence (NSEC3): %s\n", err.Error())
-			}
-		}
-	*/
 }
 
 // Check the sigs in the msg, get the signer's key (additional query), get the 
@@ -370,7 +341,7 @@ func getRRset(l []dns.RR, name string, t uint16) []dns.RR {
 
 // Get the key from the DNS (uses the local resolver) and return them.
 // If nothing is found we return nil
-func getKey(name string, keytag uint16, server string, tcp bool) *dns.RR_DNSKEY {
+func getKey(name string, keytag uint16, server string, tcp bool) *dns.DNSKEY {
 	c := new(dns.Client)
 	if tcp {
 		c.Net = "tcp"
@@ -378,12 +349,12 @@ func getKey(name string, keytag uint16, server string, tcp bool) *dns.RR_DNSKEY 
 	m := new(dns.Msg)
 	m.SetQuestion(name, dns.TypeDNSKEY)
 	m.SetEdns0(4096, true)
-	r, err := c.Exchange(m, server)
+	r, _, err := c.Exchange(m, server)
 	if err != nil {
 		return nil
 	}
 	for _, k := range r.Answer {
-		if k1, ok := k.(*dns.RR_DNSKEY); ok {
+		if k1, ok := k.(*dns.DNSKEY); ok {
 			if k1.KeyTag() == keytag {
 				return k1
 			}
@@ -393,8 +364,8 @@ func getKey(name string, keytag uint16, server string, tcp bool) *dns.RR_DNSKEY 
 }
 
 // shorten RRSIG to "miek.nl RRSIG(NS)"
-func shortSig(sig *dns.RR_RRSIG) string {
-	return sig.Header().Name + " RRSIG(" + dns.Rr_str[sig.TypeCovered] + ")"
+func shortSig(sig *dns.RRSIG) string {
+	return sig.Header().Name + " RRSIG(" + dns.TypeToString[sig.TypeCovered] + ")"
 }
 
 // Walk trough message and short Key data and Sig data
@@ -413,14 +384,14 @@ func shortMsg(in *dns.Msg) *dns.Msg {
 
 func shortRR(r dns.RR) dns.RR {
 	switch t := r.(type) {
-	case *dns.RR_DS:
+	case *dns.DS:
 		t.Digest = "..."
-	case *dns.RR_DNSKEY:
+	case *dns.DNSKEY:
 		t.PublicKey = "..."
-	case *dns.RR_RRSIG:
+	case *dns.RRSIG:
 		t.Signature = "..."
-	case *dns.RR_NSEC3:
-		t.Salt = "-" // Nobody cares
+	case *dns.NSEC3:
+		t.Salt = "." // Nobody cares
 		if len(t.TypeBitMap) > 5 {
 			t.TypeBitMap = t.TypeBitMap[1:5]
 		}
@@ -429,7 +400,7 @@ func shortRR(r dns.RR) dns.RR {
 }
 
 func doXfr(c *dns.Client, m *dns.Msg, nameserver string) {
-	if t, e := c.XfrReceive(m, nameserver); e == nil {
+	if t, e := c.TransferIn(m, nameserver); e == nil {
 		for r := range t {
 			if r.Error == nil {
 				for _, rr := range r.RR {

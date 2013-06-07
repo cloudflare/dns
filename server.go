@@ -7,9 +7,8 @@
 package dns
 
 import (
-	"github.com/miekg/radix"
-	"io"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -22,13 +21,13 @@ type Handler interface {
 type ResponseWriter interface {
 	// RemoteAddr returns the net.Addr of the client that sent the current request.
 	RemoteAddr() net.Addr
-	// Write writes a reply back to the client.
-	Write(*Msg) error
-	// WriteBuf writes a raw buffer back to the client.
-	WriteBuf([]byte) error
+	// WriteMsg writes a reply back to the client.
+	WriteMsg(*Msg) error
+	// Write writes a raw buffer back to the client.
+	Write([]byte) (int, error)
 	// Close closes the connection.
 	Close() error
-	// TsigStatus returns the status of the Tsig. 
+	// TsigStatus returns the status of the Tsig.
 	TsigStatus() error
 	// TsigTimersOnly sets the tsig timers only boolean.
 	TsigTimersOnly(bool)
@@ -43,23 +42,25 @@ type response struct {
 	tsigTimersOnly bool
 	tsigRequestMAC string
 	tsigSecret     map[string]string // the tsig secrets
-	_UDP           *net.UDPConn      // i/o connection if UDP was used
-	_TCP           *net.TCPConn      // i/o connection if TCP was used
+	udp           *net.UDPConn      // i/o connection if UDP was used
+	tcp           *net.TCPConn      // i/o connection if TCP was used
 	remoteAddr     net.Addr          // address of the client
 }
 
 // ServeMux is an DNS request multiplexer. It matches the
-// zone name of each incoming request against a list of 
+// zone name of each incoming request against a list of
 // registered patterns add calls the handler for the pattern
 // that most closely matches the zone name. ServeMux is DNSSEC aware, meaning
 // that queries for the DS record are redirected to the parent zone (if that
 // is also registered), otherwise the child gets the query.
+// ServeMux is also safe for concurrent access from multiple goroutines.
 type ServeMux struct {
-	m *radix.Radix
+	z map[string]Handler
+	m *sync.RWMutex
 }
 
 // NewServeMux allocates and returns a new ServeMux.
-func NewServeMux() *ServeMux { return &ServeMux{m: radix.New()} }
+func NewServeMux() *ServeMux { return &ServeMux{z: make(map[string]Handler), m: new(sync.RWMutex)} }
 
 // DefaultServeMux is the default ServeMux used by Serve.
 var DefaultServeMux = NewServeMux()
@@ -68,7 +69,7 @@ var DefaultServeMux = NewServeMux()
 var Authors = []string{"Miek Gieben", "Ask Bjørn Hansen", "Dave Cheney", "Dusty Wilson", "Peter van Dijk"}
 
 // Version holds the current version.
-var Version = "v1.0"
+var Version = "v1.2"
 
 // The HandlerFunc type is an adapter to allow the use of
 // ordinary functions as DNS handlers.  If f is a function
@@ -81,22 +82,22 @@ func (f HandlerFunc) ServeDNS(w ResponseWriter, r *Msg) {
 	f(w, r)
 }
 
-// FailedHandler returns a HandlerFunc 
+// FailedHandler returns a HandlerFunc
 // returns SERVFAIL for every request it gets.
 func HandleFailed(w ResponseWriter, r *Msg) {
 	m := new(Msg)
 	m.SetRcode(r, RcodeServerFailure)
 	// does not matter if this write fails
-	w.Write(m)
+	w.WriteMsg(m)
 }
 
 // AuthorHandler returns a HandlerFunc that returns the authors
 // of Go DNS for 'authors.bind' or 'authors.server' queries in the
-// CHAOS Class. Note with 
+// CHAOS Class. Note with:
 //
-//	HandleFunc("authors.bind.", HandleAuthors)
+//	dns.HandleFunc("authors.bind.", dns.HandleAuthors)
 //
-// The handler is registered for all DNS classes, thereby potentially
+// the handler is registered for all DNS classes, thereby potentially
 // hijacking the authors.bind. zone in the IN class. If you need the
 // authors.bind zone to exist in the IN class, you need to register
 // some other handler, check the class in there and then call HandleAuthors.
@@ -117,18 +118,18 @@ func HandleAuthors(w ResponseWriter, r *Msg) {
 	m.SetReply(r)
 	for _, author := range Authors {
 		h := RR_Header{r.Question[0].Name, TypeTXT, ClassCHAOS, 0, 0}
-		m.Answer = append(m.Answer, &RR_TXT{h, []string{author}})
+		m.Answer = append(m.Answer, &TXT{h, []string{author}})
 	}
-	w.Write(m)
+	w.WriteMsg(m)
 }
 
 // VersionHandler returns a HandlerFunc that returns the version
 // of Go DNS for 'version.bind' or 'version.server' queries in the
-// CHAOS Class. Note with 
+// CHAOS Class. Note with:
 //
-//	HandleFunc("version.bind.", HandleVersion)
+//	dns.HandleFunc("version.bind.", dns.HandleVersion)
 //
-// The handler is registered for all DNS classes, thereby potentially
+// the handler is registered for all DNS classes, thereby potentially
 // hijacking the version.bind. zone in the IN class. If you need the
 // version.bind zone to exist in the IN class, you need to register
 // some other handler, check the class in there and then call HandleVersion.
@@ -148,8 +149,8 @@ func HandleVersion(w ResponseWriter, r *Msg) {
 	m := new(Msg)
 	m.SetReply(r)
 	h := RR_Header{r.Question[0].Name, TypeTXT, ClassCHAOS, 0, 0}
-	m.Answer = append(m.Answer, &RR_TXT{h, []string{Version}})
-	w.Write(m)
+	m.Answer = append(m.Answer, &TXT{h, []string{Version}})
+	w.WriteMsg(m)
 }
 
 func authorHandler() Handler  { return HandlerFunc(HandleAuthors) }
@@ -157,31 +158,46 @@ func failedHandler() Handler  { return HandlerFunc(HandleFailed) }
 func versionHandler() Handler { return HandlerFunc(HandleVersion) }
 
 // Start a server on addresss and network speficied. Invoke handler
-// for any incoming queries.
+// for incoming queries.
 func ListenAndServe(addr string, network string, handler Handler) error {
 	server := &Server{Addr: addr, Net: network, Handler: handler}
 	return server.ListenAndServe()
 }
 
-func (mux *ServeMux) match(zone string, t uint16) Handler {
-	if h, e := mux.m.Find(toRadixName(zone)); e {
-		// If we got queried for a DS record, we must see if we
-		// if we also serve the parent. We then redirect the query to it.
-		if t != TypeDS {
-			return h.Value.(Handler)
+func (mux *ServeMux) match(q string, t uint16) Handler {
+	mux.m.RLock()
+	defer mux.m.RUnlock()
+	var (
+		handler  Handler
+		lastdot  int = -1
+		lastbyte byte
+		seendot  bool = true
+	)
+	for i := 0; i < len(q); i++ {
+		if seendot {
+			if h, ok := mux.z[q[lastdot+1:]]; ok {
+				if t != TypeDS {
+					return h
+				} else {
+					// Continue for DS to see if we have a parent too, if so delegeate to the parent
+					handler = h
+				}
+			}
 		}
-		if d := h.Up(); d != nil {
-			return d.Value.(Handler)
+
+		if q[i] == '.' && lastbyte != '\\' {
+			lastdot = i
+			seendot = true
+		} else {
+			seendot = false
 		}
-		// No parent zone found, let the original handler take care of it
-		return h.Value.(Handler)
-	} else {
-		if h == nil {
-			return nil
-		}
-		return h.Value.(Handler)
+		lastbyte = q[i]
 	}
-	panic("dns: not reached")
+	// Wildcard match, if we have found nothing try the root zone as a last resort.
+	if h, ok := mux.z["."]; ok {
+		return h
+	}
+	return handler
 }
 
 // Handle adds a handler to the ServeMux for pattern.
@@ -189,7 +205,9 @@ func (mux *ServeMux) Handle(pattern string, handler Handler) {
 	if pattern == "" {
 		panic("dns: invalid pattern " + pattern)
 	}
-	mux.m.Insert(toRadixName(Fqdn(pattern)), handler)
+	mux.m.Lock()
+	mux.z[Fqdn(pattern)] = handler
+	mux.m.Unlock()
 }
 
 // Handle adds a handler to the ServeMux for pattern.
@@ -202,8 +220,9 @@ func (mux *ServeMux) HandleRemove(pattern string) {
 	if pattern == "" {
 		panic("dns: invalid pattern " + pattern)
 	}
-	// if its there, its gone
-	mux.m.Remove(toRadixName(Fqdn(pattern)))
+	mux.m.Lock()
+	delete(mux.z, Fqdn(pattern))
+	mux.m.Unlock()
 }
 
 // ServeDNS dispatches the request to the handler whose
@@ -294,7 +313,7 @@ forever:
 	for {
 		rw, e := l.AcceptTCP()
 		if e != nil {
-			// don't bail out, but wait for a new request  
+			// don't bail out, but wait for a new request
 			continue
 		}
 		if srv.ReadTimeout != 0 {
@@ -368,15 +387,15 @@ func serve(a net.Addr, h Handler, m []byte, u *net.UDPConn, t *net.TCPConn, tsig
 		// Request has been read in serveUDP or serveTCP
 		w := new(response)
 		w.tsigSecret = tsigSecret
-		w._UDP = u
-		w._TCP = t
+		w.udp = u
+		w.tcp = t
 		w.remoteAddr = a
 		req := new(Msg)
 		if req.Unpack(m) != nil {
 			// Send a format error back
 			x := new(Msg)
 			x.SetRcodeFormatError(req)
-			w.Write(x)
+			w.WriteMsg(x)
 			break
 		}
 
@@ -389,7 +408,7 @@ func serve(a net.Addr, h Handler, m []byte, u *net.UDPConn, t *net.TCPConn, tsig
 				}
 				w.tsigStatus = TsigVerify(m, tsigSecret[secret], "", false)
 				w.tsigTimersOnly = false
-				w.tsigRequestMAC = req.Extra[len(req.Extra)-1].(*RR_TSIG).MAC
+				w.tsigRequestMAC = req.Extra[len(req.Extra)-1].(*TSIG).MAC
 			}
 		}
 		h.ServeDNS(w, req) // this does the writing back to the client
@@ -405,8 +424,8 @@ func serve(a net.Addr, h Handler, m []byte, u *net.UDPConn, t *net.TCPConn, tsig
 	return
 }
 
-// Write implements the ResponseWriter.Write method.
-func (w *response) Write(m *Msg) (err error) {
+// WriteMsg implements the ResponseWriter.WriteMsg method.
+func (w *response) WriteMsg(m *Msg) (err error) {
 	var data []byte
 	if w.tsigSecret != nil { // if no secrets, dont check for the tsig (which is a longer check)
 		if t := m.IsTsig(); t != nil {
@@ -414,51 +433,48 @@ func (w *response) Write(m *Msg) (err error) {
 			if err != nil {
 				return err
 			}
-			return w.WriteBuf(data)
+			_, err = w.Write(data)
+			return err
 		}
 	}
 	data, err = m.Pack(nil)
 	if err != nil {
 		return err
 	}
-	return w.WriteBuf(data)
+	_, err = w.Write(data)
+	return err
 }
 
-// WriteBuf implements the ResponseWriter.WriteBuf method.
-func (w *response) WriteBuf(m []byte) (err error) {
+// Write implements the ResponseWriter.Write method.
+func (w *response) Write(m []byte) (int, error) {
 	switch {
-	case w._UDP != nil:
-		_, err := w._UDP.WriteTo(m, w.remoteAddr)
-		if err != nil {
-			return err
-		}
-	case w._TCP != nil:
+	case w.udp != nil:
+		n, err := w.udp.WriteTo(m, w.remoteAddr)
+		return n, err
+	case w.tcp != nil:
+		lm := len(m)
 		if len(m) > MaxMsgSize {
-			return &Error{Err: "message too large"}
+			return 0, &Error{Err: "message too large"}
 		}
-		a, b := packUint16(uint16(len(m)))
-		n, err := w._TCP.Write([]byte{a, b})
+		l := make([]byte, 2)
+		l[0], l[1] = packUint16(uint16(lm))
+		m = append(l, m...)
+		n, err := w.tcp.Write(m)
 		if err != nil {
-			return err
-		}
-		if n != 2 {
-			return io.ErrShortWrite
-		}
-		n, err = w._TCP.Write(m)
-		if err != nil {
-			return err
+			return n, err
 		}
 		i := n
-		if i < len(m) {
-			j, err := w._TCP.Write(m[i:len(m)])
+		if i < lm {
+			j, err := w.tcp.Write(m[i:lm])
 			if err != nil {
-				return err
+				return i, err
 			}
 			i += j
 		}
 		n = i
+		return i, nil
 	}
-	return nil
+	panic("not reached")
 }
 
 // RemoteAddr implements the ResponseWriter.RemoteAddr method.
@@ -475,14 +491,14 @@ func (w *response) Hijack() { w.hijacked = true }
 
 // Close implements the ResponseWriter.Close method
 func (w *response) Close() error {
-	if w._UDP != nil {
-		e := w._UDP.Close()
-		w._UDP = nil
+	if w.udp != nil {
+		e := w.udp.Close()
+		w.udp = nil
 		return e
 	}
-	if w._TCP != nil {
-		e := w._TCP.Close()
-		w._TCP = nil
+	if w.tcp != nil {
+		e := w.tcp.Close()
+		w.tcp = nil
 		return e
 	}
 	// no-op

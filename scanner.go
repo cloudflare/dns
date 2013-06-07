@@ -1,3 +1,7 @@
+// Copyright 2011 Miek Gieben. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package dns
 
 // Implement a simple scanner, return a byte stream from an io reader.
@@ -11,6 +15,7 @@ import (
 type scan struct {
 	src      *bufio.Reader
 	position scanner.Position
+	eof      bool // Have we just seen a eof
 }
 
 func scanInit(r io.Reader) *scan {
@@ -26,9 +31,16 @@ func (s *scan) tokenText() (byte, error) {
 	if err != nil {
 		return c, err
 	}
-	if c == '\n' {
+	// delay the newline handling until the next token is delivered,
+	// fixes off-by-one errors when reporting a parse error.
+	if s.eof == true {
 		s.position.Line++
 		s.position.Column = 0
+		s.eof = false
+	}
+	if c == '\n' {
+		s.eof = true
+		return c, nil
 	}
 	s.position.Column++
 	return c, nil

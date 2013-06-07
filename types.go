@@ -1,7 +1,7 @@
 // Copyright 2009 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
-// Extended and bugfixes by Miek Gieben
+// Extensions of the original work are copyright (c) 2011 Miek Gieben
 
 package dns
 
@@ -19,6 +19,7 @@ import (
 // Wire constants and supported types.
 const (
 	// valid RR_Header.Rrtype and Question.qtype
+	TypeNone       uint16 = 0
 	TypeA          uint16 = 1
 	TypeNS         uint16 = 2
 	TypeMD         uint16 = 3
@@ -37,6 +38,8 @@ const (
 	TypeTXT        uint16 = 16
 	TypeRP         uint16 = 17
 	TypeAFSDB      uint16 = 18
+	TypeX25        uint16 = 19
+	TypeISDN       uint16 = 20
 	TypeRT         uint16 = 21
 	TypeSIG        uint16 = 24
 	TypeKEY        uint16 = 25
@@ -44,6 +47,7 @@ const (
 	TypeLOC        uint16 = 29
 	TypeNXT        uint16 = 30
 	TypeSRV        uint16 = 33
+	TypeATMA       uint16 = 34
 	TypeNAPTR      uint16 = 35
 	TypeKX         uint16 = 36
 	TypeCERT       uint16 = 37
@@ -60,8 +64,21 @@ const (
 	TypeNSEC3PARAM uint16 = 51
 	TypeTLSA       uint16 = 52
 	TypeHIP        uint16 = 55
+	TypeNINFO      uint16 = 56
+	TypeRKEY       uint16 = 57
 	TypeTALINK     uint16 = 58
+	TypeCDS        uint16 = 59
 	TypeSPF        uint16 = 99
+	TypeUINFO      uint16 = 100
+	TypeUID        uint16 = 101
+	TypeGID        uint16 = 102
+	TypeUNSPEC     uint16 = 103
+	TypeNID        uint16 = 104
+	TypeL32        uint16 = 105
+	TypeL64        uint16 = 106
+	TypeLP         uint16 = 107
+	TypeEUI48      uint16 = 108
+	TypeEUI64      uint16 = 109
 
 	TypeTKEY uint16 = 249
 	TypeTSIG uint16 = 250
@@ -73,6 +90,7 @@ const (
 	TypeANY   uint16 = 255
 
 	TypeURI uint16 = 256
+	TypeCAA uint16 = 257
 	TypeTA  uint16 = 32768
 	TypeDLV uint16 = 32769
 
@@ -97,6 +115,7 @@ const (
 	RcodeNotAuth        = 9
 	RcodeNotZone        = 10
 	RcodeBadSig         = 16 // TSIG
+	RcodeBadVers        = 16 // EDNS0
 	RcodeBadKey         = 17
 	RcodeBadTime        = 18
 	RcodeBadMode        = 19 // TKEY
@@ -148,358 +167,274 @@ func (q *Question) String() (s string) {
 	} else {
 		s = ";" + q.Name + "\t"
 	}
-	if _, ok := Class_str[q.Qclass]; ok {
-		s += Class_str[q.Qclass] + "\t"
+	if _, ok := ClassToString[q.Qclass]; ok {
+		s += ClassToString[q.Qclass] + "\t"
 	} else {
 		s += "CLASS" + strconv.Itoa(int(q.Qtype))
 	}
 
-	if _, ok := Rr_str[q.Qtype]; ok {
-		s += " " + Rr_str[q.Qtype]
+	if _, ok := TypeToString[q.Qtype]; ok {
+		s += " " + TypeToString[q.Qtype]
 	} else {
 		s += " " + "TYPE" + strconv.Itoa(int(q.Qtype))
 	}
 	return s
 }
 
-func (q *Question) Len() int {
+func (q *Question) len() int {
 	l := len(q.Name) + 1
 	return l + 4
 }
 
-type RR_ANY struct {
+type ANY struct {
 	Hdr RR_Header
 	// Does not have any rdata
 }
 
-func (rr *RR_ANY) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *ANY) Header() *RR_Header { return &rr.Hdr }
+func (rr *ANY) copy() RR           { return &ANY{*rr.Hdr.copyHeader()} }
+func (rr *ANY) String() string     { return rr.Hdr.String() }
+func (rr *ANY) len() int           { return rr.Hdr.len() }
 
-func (rr *RR_ANY) String() string {
-	return rr.Hdr.String()
-}
-
-func (rr *RR_ANY) Len() int {
-	return rr.Hdr.Len()
-}
-
-func (rr *RR_ANY) Copy() RR {
-	return &RR_ANY{*rr.Hdr.CopyHeader()}
-}
-
-type RR_CNAME struct {
+type CNAME struct {
 	Hdr    RR_Header
 	Target string `dns:"cdomain-name"`
 }
 
-func (rr *RR_CNAME) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *CNAME) Header() *RR_Header { return &rr.Hdr }
+func (rr *CNAME) copy() RR           { return &CNAME{*rr.Hdr.copyHeader(), rr.Target} }
+func (rr *CNAME) String() string     { return rr.Hdr.String() + rr.Target }
+func (rr *CNAME) len() int           { return rr.Hdr.len() + len(rr.Target) + 1 }
 
-func (rr *RR_CNAME) String() string {
-	return rr.Hdr.String() + rr.Target
-}
-
-func (rr *RR_CNAME) Len() int {
-	l := len(rr.Target) + 1
-	return rr.Hdr.Len() + l
-}
-
-func (rr *RR_CNAME) Copy() RR {
-	return &RR_CNAME{*rr.Hdr.CopyHeader(), rr.Target}
-}
-
-type RR_HINFO struct {
+type HINFO struct {
 	Hdr RR_Header
 	Cpu string
 	Os  string
 }
 
-func (rr *RR_HINFO) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *HINFO) Header() *RR_Header { return &rr.Hdr }
+func (rr *HINFO) copy() RR           { return &HINFO{*rr.Hdr.copyHeader(), rr.Cpu, rr.Os} }
+func (rr *HINFO) String() string     { return rr.Hdr.String() + rr.Cpu + " " + rr.Os }
+func (rr *HINFO) len() int           { return rr.Hdr.len() + len(rr.Cpu) + len(rr.Os) }
 
-func (rr *RR_HINFO) String() string {
-	return rr.Hdr.String() + rr.Cpu + " " + rr.Os
-}
-
-func (rr *RR_HINFO) Len() int {
-	return rr.Hdr.Len() + len(rr.Cpu) + len(rr.Os)
-}
-
-func (rr *RR_HINFO) Copy() RR {
-	return &RR_HINFO{*rr.Hdr.CopyHeader(), rr.Cpu, rr.Os}
-}
-
-type RR_MB struct {
+type MB struct {
 	Hdr RR_Header
 	Mb  string `dns:"cdomain-name"`
 }
 
-func (rr *RR_MB) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *MB) Header() *RR_Header { return &rr.Hdr }
+func (rr *MB) copy() RR           { return &MB{*rr.Hdr.copyHeader(), rr.Mb} }
 
-func (rr *RR_MB) String() string {
-	return rr.Hdr.String() + rr.Mb
-}
+func (rr *MB) String() string { return rr.Hdr.String() + rr.Mb }
+func (rr *MB) len() int       { return rr.Hdr.len() + len(rr.Mb) + 1 }
 
-func (rr *RR_MB) Len() int {
-	l := len(rr.Mb) + 1
-	return rr.Hdr.Len() + l
-}
-
-func (rr *RR_MB) Copy() RR {
-	return &RR_MB{*rr.Hdr.CopyHeader(), rr.Mb}
-}
-
-type RR_MG struct {
+type MG struct {
 	Hdr RR_Header
 	Mg  string `dns:"cdomain-name"`
 }
 
-func (rr *RR_MG) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *MG) Header() *RR_Header { return &rr.Hdr }
+func (rr *MG) copy() RR           { return &MG{*rr.Hdr.copyHeader(), rr.Mg} }
 
-func (rr *RR_MG) String() string {
+func (rr *MG) String() string {
 	return rr.Hdr.String() + rr.Mg
 }
 
-func (rr *RR_MG) Len() int {
+func (rr *MG) len() int {
 	l := len(rr.Mg) + 1
-	return rr.Hdr.Len() + l
+	return rr.Hdr.len() + l
 }
 
-func (rr *RR_MG) Copy() RR {
-	return &RR_MG{*rr.Hdr.CopyHeader(), rr.Mg}
-}
-
-type RR_MINFO struct {
+type MINFO struct {
 	Hdr   RR_Header
 	Rmail string `dns:"cdomain-name"`
 	Email string `dns:"cdomain-name"`
 }
 
-func (rr *RR_MINFO) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *MINFO) Header() *RR_Header { return &rr.Hdr }
+func (rr *MINFO) copy() RR           { return &MINFO{*rr.Hdr.copyHeader(), rr.Rmail, rr.Email} }
 
-func (rr *RR_MINFO) String() string {
+func (rr *MINFO) String() string {
 	return rr.Hdr.String() + rr.Rmail + " " + rr.Email
 }
 
-func (rr *RR_MINFO) Len() int {
+func (rr *MINFO) len() int {
 	l := len(rr.Rmail) + 1
 	n := len(rr.Email) + 1
-	return rr.Hdr.Len() + l + n
+	return rr.Hdr.len() + l + n
 }
 
-func (rr *RR_MINFO) Copy() RR {
-	return &RR_MINFO{*rr.Hdr.CopyHeader(), rr.Rmail, rr.Email}
-}
-
-type RR_MR struct {
+type MR struct {
 	Hdr RR_Header
 	Mr  string `dns:"cdomain-name"`
 }
 
-func (rr *RR_MR) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *MR) Header() *RR_Header { return &rr.Hdr }
+func (rr *MR) copy() RR           { return &MR{*rr.Hdr.copyHeader(), rr.Mr} }
 
-func (rr *RR_MR) String() string {
+func (rr *MR) String() string {
 	return rr.Hdr.String() + rr.Mr
 }
 
-func (rr *RR_MR) Len() int {
+func (rr *MR) len() int {
 	l := len(rr.Mr) + 1
-	return rr.Hdr.Len() + l
+	return rr.Hdr.len() + l
 }
 
-func (rr *RR_MR) Copy() RR {
-	return &RR_MR{*rr.Hdr.CopyHeader(), rr.Mr}
-}
-
-type RR_MF struct {
+type MF struct {
 	Hdr RR_Header
 	Mf  string `dns:"cdomain-name"`
 }
 
-func (rr *RR_MF) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *MF) Header() *RR_Header { return &rr.Hdr }
+func (rr *MF) copy() RR           { return &MF{*rr.Hdr.copyHeader(), rr.Mf} }
 
-func (rr *RR_MF) String() string {
+func (rr *MF) String() string {
 	return rr.Hdr.String() + " " + rr.Mf
 }
 
-func (rr *RR_MF) Len() int {
-	return rr.Hdr.Len() + len(rr.Mf) + 1
+func (rr *MF) len() int {
+	return rr.Hdr.len() + len(rr.Mf) + 1
 }
 
-func (rr *RR_MF) Copy() RR {
-	return &RR_MF{*rr.Hdr.CopyHeader(), rr.Mf}
-}
-
-type RR_MD struct {
+type MD struct {
 	Hdr RR_Header
 	Md  string `dns:"cdomain-name"`
 }
 
-func (rr *RR_MD) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *MD) Header() *RR_Header { return &rr.Hdr }
+func (rr *MD) copy() RR           { return &MD{*rr.Hdr.copyHeader(), rr.Md} }
 
-func (rr *RR_MD) String() string {
+func (rr *MD) String() string {
 	return rr.Hdr.String() + " " + rr.Md
 }
 
-func (rr *RR_MD) Len() int {
-	return rr.Hdr.Len() + len(rr.Md) + 1
+func (rr *MD) len() int {
+	return rr.Hdr.len() + len(rr.Md) + 1
 }
 
-func (rr *RR_MD) Copy() RR {
-	return &RR_MD{*rr.Hdr.CopyHeader(), rr.Md}
+type MX struct {
+	Hdr        RR_Header
+	Preference uint16
+	Mx         string `dns:"cdomain-name"`
 }
 
-type RR_MX struct {
-	Hdr  RR_Header
-	Pref uint16
-	Mx   string `dns:"cdomain-name"`
+func (rr *MX) Header() *RR_Header { return &rr.Hdr }
+func (rr *MX) copy() RR           { return &MX{*rr.Hdr.copyHeader(), rr.Preference, rr.Mx} }
+
+func (rr *MX) String() string {
+	return rr.Hdr.String() + strconv.Itoa(int(rr.Preference)) + " " + rr.Mx
 }
 
-func (rr *RR_MX) Header() *RR_Header {
-	return &rr.Hdr
-}
-
-func (rr *RR_MX) String() string {
-	return rr.Hdr.String() + strconv.Itoa(int(rr.Pref)) + " " + rr.Mx
-}
-
-func (rr *RR_MX) Len() int {
+func (rr *MX) len() int {
 	l := len(rr.Mx) + 1
-	return rr.Hdr.Len() + l + 2
+	return rr.Hdr.len() + l + 2
 }
 
-func (rr *RR_MX) Copy() RR {
-	return &RR_MX{*rr.Hdr.CopyHeader(), rr.Pref, rr.Mx}
-}
-
-type RR_AFSDB struct {
+type AFSDB struct {
 	Hdr      RR_Header
 	Subtype  uint16
 	Hostname string `dns:"cdomain-name"`
 }
 
-func (rr *RR_AFSDB) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *AFSDB) Header() *RR_Header { return &rr.Hdr }
+func (rr *AFSDB) copy() RR           { return &AFSDB{*rr.Hdr.copyHeader(), rr.Subtype, rr.Hostname} }
 
-func (rr *RR_AFSDB) String() string {
+func (rr *AFSDB) String() string {
 	return rr.Hdr.String() + strconv.Itoa(int(rr.Subtype)) + " " + rr.Hostname
 }
 
-func (rr *RR_AFSDB) Len() int {
+func (rr *AFSDB) len() int {
 	l := len(rr.Hostname) + 1
-	return rr.Hdr.Len() + l + 2
+	return rr.Hdr.len() + l + 2
 }
 
-func (rr *RR_AFSDB) Copy() RR {
-	return &RR_AFSDB{*rr.Hdr.CopyHeader(), rr.Subtype, rr.Hostname}
+type X25 struct {
+	Hdr         RR_Header
+	PSDNAddress string
 }
 
-type RR_RT struct {
+func (rr *X25) Header() *RR_Header { return &rr.Hdr }
+func (rr *X25) copy() RR           { return &X25{*rr.Hdr.copyHeader(), rr.PSDNAddress} }
+
+func (rr *X25) String() string {
+	return rr.Hdr.String() + rr.PSDNAddress
+}
+
+func (rr *X25) len() int {
+	return rr.Hdr.len() + len(rr.PSDNAddress)
+}
+
+type RT struct {
 	Hdr        RR_Header
 	Preference uint16
 	Host       string `dns:"cdomain-name"`
 }
 
-func (rr *RR_RT) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *RT) Header() *RR_Header { return &rr.Hdr }
+func (rr *RT) copy() RR           { return &RT{*rr.Hdr.copyHeader(), rr.Preference, rr.Host} }
 
-func (rr *RR_RT) String() string {
+func (rr *RT) String() string {
 	return rr.Hdr.String() + strconv.Itoa(int(rr.Preference)) + " " + rr.Host
 }
 
-func (rr *RR_RT) Len() int {
+func (rr *RT) len() int {
 	l := len(rr.Host) + 1
-	return rr.Hdr.Len() + l + 2
+	return rr.Hdr.len() + l + 2
 }
 
-func (rr *RR_RT) Copy() RR {
-	return &RR_RT{*rr.Hdr.CopyHeader(), rr.Preference, rr.Host}
-}
-
-type RR_NS struct {
+type NS struct {
 	Hdr RR_Header
 	Ns  string `dns:"cdomain-name"`
 }
 
-func (rr *RR_NS) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *NS) Header() *RR_Header { return &rr.Hdr }
+func (rr *NS) copy() RR           { return &NS{*rr.Hdr.copyHeader(), rr.Ns} }
 
-func (rr *RR_NS) String() string {
+func (rr *NS) String() string {
 	return rr.Hdr.String() + rr.Ns
 }
 
-func (rr *RR_NS) Len() int {
+func (rr *NS) len() int {
 	l := len(rr.Ns) + 1
-	return rr.Hdr.Len() + l
+	return rr.Hdr.len() + l
 }
 
-func (rr *RR_NS) Copy() RR {
-	return &RR_NS{*rr.Hdr.CopyHeader(), rr.Ns}
-}
-
-type RR_PTR struct {
+type PTR struct {
 	Hdr RR_Header
 	Ptr string `dns:"cdomain-name"`
 }
 
-func (rr *RR_PTR) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *PTR) Header() *RR_Header { return &rr.Hdr }
+func (rr *PTR) copy() RR           { return &PTR{*rr.Hdr.copyHeader(), rr.Ptr} }
 
-func (rr *RR_PTR) String() string {
+func (rr *PTR) String() string {
 	return rr.Hdr.String() + rr.Ptr
 }
 
-func (rr *RR_PTR) Len() int {
+func (rr *PTR) len() int {
 	l := len(rr.Ptr) + 1
-	return rr.Hdr.Len() + l
+	return rr.Hdr.len() + l
 }
 
-func (rr *RR_PTR) Copy() RR {
-	return &RR_PTR{*rr.Hdr.CopyHeader(), rr.Ptr}
-}
-
-type RR_RP struct {
+type RP struct {
 	Hdr  RR_Header
 	Mbox string `dns:"domain-name"`
 	Txt  string `dns:"domain-name"`
 }
 
-func (rr *RR_RP) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *RP) Header() *RR_Header { return &rr.Hdr }
+func (rr *RP) copy() RR           { return &RP{*rr.Hdr.copyHeader(), rr.Mbox, rr.Txt} }
 
-func (rr *RR_RP) String() string {
+func (rr *RP) String() string {
 	return rr.Hdr.String() + rr.Mbox + " " + rr.Txt
 }
 
-func (rr *RR_RP) Len() int {
-	return rr.Hdr.Len() + len(rr.Mbox) + 1 + len(rr.Txt) + 1
+func (rr *RP) len() int {
+	return rr.Hdr.len() + len(rr.Mbox) + 1 + len(rr.Txt) + 1
 }
 
-func (rr *RR_RP) Copy() RR {
-	return &RR_RP{*rr.Hdr.CopyHeader(), rr.Mbox, rr.Txt}
-}
-
-type RR_SOA struct {
+type SOA struct {
 	Hdr     RR_Header
 	Ns      string `dns:"cdomain-name"`
 	Mbox    string `dns:"cdomain-name"`
@@ -510,11 +445,12 @@ type RR_SOA struct {
 	Minttl  uint32
 }
 
-func (rr *RR_SOA) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *SOA) Header() *RR_Header { return &rr.Hdr }
+func (rr *SOA) copy() RR {
+	return &SOA{*rr.Hdr.copyHeader(), rr.Ns, rr.Mbox, rr.Serial, rr.Refresh, rr.Retry, rr.Expire, rr.Minttl}
 }
 
-func (rr *RR_SOA) String() string {
+func (rr *SOA) String() string {
 	return rr.Hdr.String() + rr.Ns + " " + rr.Mbox +
 		" " + strconv.FormatInt(int64(rr.Serial), 10) +
 		" " + strconv.FormatInt(int64(rr.Refresh), 10) +
@@ -523,26 +459,21 @@ func (rr *RR_SOA) String() string {
 		" " + strconv.FormatInt(int64(rr.Minttl), 10)
 }
 
-func (rr *RR_SOA) Len() int {
+func (rr *SOA) len() int {
 	l := len(rr.Ns) + 1
 	n := len(rr.Mbox) + 1
-	return rr.Hdr.Len() + l + n + 20
+	return rr.Hdr.len() + l + n + 20
 }
 
-func (rr *RR_SOA) Copy() RR {
-	return &RR_SOA{*rr.Hdr.CopyHeader(), rr.Ns, rr.Mbox, rr.Serial, rr.Refresh, rr.Retry, rr.Expire, rr.Minttl}
-}
-
-type RR_TXT struct {
+type TXT struct {
 	Hdr RR_Header
 	Txt []string `dns:"txt"`
 }
 
-func (rr *RR_TXT) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *TXT) Header() *RR_Header { return &rr.Hdr }
+func (rr *TXT) copy() RR           { return &TXT{*rr.Hdr.copyHeader(), rr.Txt} } // this doesn't really copy Txt does it? (TODO?(mg))
 
-func (rr *RR_TXT) String() string {
+func (rr *TXT) String() string {
 	s := rr.Hdr.String()
 	for i, s1 := range rr.Txt {
 		if i > 0 {
@@ -554,52 +485,46 @@ func (rr *RR_TXT) String() string {
 	return s
 }
 
-func (rr *RR_TXT) Len() int {
-	l := rr.Hdr.Len()
-	for _, t := range rr.Txt {
+func (rr *TXT) len() int {
+	l := rr.Hdr.len()
+	for i, t := range rr.Txt {
+		if i > 0 {
+			l += 1
+		}
 		l += len(t)
 	}
 	return l
 }
 
-func (rr *RR_TXT) Copy() RR {
-	return &RR_TXT{*rr.Hdr.CopyHeader(), rr.Txt}
-}
-
-type RR_SPF struct {
+type SPF struct {
 	Hdr RR_Header
 	Txt []string `dns:"txt"`
 }
 
-func (rr *RR_SPF) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *SPF) Header() *RR_Header { return &rr.Hdr }
+func (rr *SPF) copy() RR           { return &SPF{*rr.Hdr.copyHeader(), rr.Txt} }
 
-func (rr *RR_SPF) String() string {
+func (rr *SPF) String() string {
 	s := rr.Hdr.String()
 	for i, s1 := range rr.Txt {
 		if i > 0 {
-			s += " " + "\"" + s1 + "\""
+			s += " " + strconv.QuoteToASCII(s1)
 		} else {
-			s += "\"" + s1 + "\""
+			s += strconv.QuoteToASCII(s1)
 		}
 	}
 	return s
 }
 
-func (rr *RR_SPF) Len() int {
-	l := rr.Hdr.Len()
+func (rr *SPF) len() int {
+	l := rr.Hdr.len()
 	for _, t := range rr.Txt {
 		l += len(t)
 	}
 	return l
 }
 
-func (rr *RR_SPF) Copy() RR {
-	return &RR_SPF{*rr.Hdr.CopyHeader(), rr.Txt}
-}
-
-type RR_SRV struct {
+type SRV struct {
 	Hdr      RR_Header
 	Priority uint16
 	Weight   uint16
@@ -607,61 +532,55 @@ type RR_SRV struct {
 	Target   string `dns:"domain-name"`
 }
 
-func (rr *RR_SRV) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *SRV) Header() *RR_Header { return &rr.Hdr }
+func (rr *SRV) copy() RR {
+	return &SRV{*rr.Hdr.copyHeader(), rr.Priority, rr.Weight, rr.Port, rr.Target}
 }
 
-func (rr *RR_SRV) String() string {
+func (rr *SRV) String() string {
 	return rr.Hdr.String() +
 		strconv.Itoa(int(rr.Priority)) + " " +
 		strconv.Itoa(int(rr.Weight)) + " " +
 		strconv.Itoa(int(rr.Port)) + " " + rr.Target
 }
 
-func (rr *RR_SRV) Len() int {
+func (rr *SRV) len() int {
 	l := len(rr.Target) + 1
-	return rr.Hdr.Len() + l + 6
+	return rr.Hdr.len() + l + 6
 }
 
-func (rr *RR_SRV) Copy() RR {
-	return &RR_SRV{*rr.Hdr.CopyHeader(), rr.Priority, rr.Weight, rr.Port, rr.Target}
-}
-
-type RR_NAPTR struct {
+type NAPTR struct {
 	Hdr         RR_Header
 	Order       uint16
-	Pref        uint16
+	Preference  uint16
 	Flags       string
 	Service     string
 	Regexp      string
 	Replacement string `dns:"domain-name"`
 }
 
-func (rr *RR_NAPTR) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *NAPTR) Header() *RR_Header { return &rr.Hdr }
+func (rr *NAPTR) copy() RR {
+	return &NAPTR{*rr.Hdr.copyHeader(), rr.Order, rr.Preference, rr.Flags, rr.Service, rr.Regexp, rr.Replacement}
 }
 
-func (rr *RR_NAPTR) String() string {
+func (rr *NAPTR) String() string {
 	return rr.Hdr.String() +
 		strconv.Itoa(int(rr.Order)) + " " +
-		strconv.Itoa(int(rr.Pref)) + " " +
+		strconv.Itoa(int(rr.Preference)) + " " +
 		"\"" + rr.Flags + "\" " +
 		"\"" + rr.Service + "\" " +
 		"\"" + rr.Regexp + "\" " +
 		rr.Replacement
 }
 
-func (rr *RR_NAPTR) Len() int {
-	return rr.Hdr.Len() + 4 + len(rr.Flags) + len(rr.Service) +
+func (rr *NAPTR) len() int {
+	return rr.Hdr.len() + 4 + len(rr.Flags) + len(rr.Service) +
 		len(rr.Regexp) + len(rr.Replacement) + 1
 }
 
-func (rr *RR_NAPTR) Copy() RR {
-	return &RR_NAPTR{*rr.Hdr.CopyHeader(), rr.Order, rr.Pref, rr.Flags, rr.Service, rr.Regexp, rr.Replacement}
-}
-
 // See RFC 4398.
-type RR_CERT struct {
+type CERT struct {
 	Hdr         RR_Header
 	Type        uint16
 	KeyTag      uint16
@@ -669,92 +588,62 @@ type RR_CERT struct {
 	Certificate string `dns:"base64"`
 }
 
-func (rr *RR_CERT) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *CERT) Header() *RR_Header { return &rr.Hdr }
+func (rr *CERT) copy() RR {
+	return &CERT{*rr.Hdr.copyHeader(), rr.Type, rr.KeyTag, rr.Algorithm, rr.Certificate}
 }
 
-func (rr *RR_CERT) String() string {
+func (rr *CERT) String() string {
 	return rr.Hdr.String() + strconv.Itoa(int(rr.Type)) +
 		" " + strconv.Itoa(int(rr.KeyTag)) +
 		" " + strconv.Itoa(int(rr.Algorithm)) +
 		" " + rr.Certificate
 }
 
-func (rr *RR_CERT) Len() int {
-	return rr.Hdr.Len() + 5 +
+func (rr *CERT) len() int {
+	return rr.Hdr.len() + 5 +
 		base64.StdEncoding.DecodedLen(len(rr.Certificate))
 }
 
-func (rr *RR_CERT) Copy() RR {
-	return &RR_CERT{*rr.Hdr.CopyHeader(), rr.Type, rr.KeyTag, rr.Algorithm, rr.Certificate}
-}
-
 // See RFC 2672.
-type RR_DNAME struct {
+type DNAME struct {
 	Hdr    RR_Header
 	Target string `dns:"domain-name"`
 }
 
-func (rr *RR_DNAME) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *DNAME) Header() *RR_Header { return &rr.Hdr }
+func (rr *DNAME) copy() RR           { return &DNAME{*rr.Hdr.copyHeader(), rr.Target} }
 
-func (rr *RR_DNAME) String() string {
+func (rr *DNAME) String() string {
 	return rr.Hdr.String() + rr.Target
 }
 
-func (rr *RR_DNAME) Len() int {
+func (rr *DNAME) len() int {
 	l := len(rr.Target) + 1
-	return rr.Hdr.Len() + l
+	return rr.Hdr.len() + l
 }
 
-func (rr *RR_DNAME) Copy() RR {
-	return &RR_DNAME{*rr.Hdr.CopyHeader(), rr.Target}
-}
-
-type RR_A struct {
+type A struct {
 	Hdr RR_Header
 	A   net.IP `dns:"a"`
 }
 
-func (rr *RR_A) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *A) Header() *RR_Header { return &rr.Hdr }
+func (rr *A) copy() RR           { return &A{*rr.Hdr.copyHeader(), rr.A} }
+func (rr *A) String() string     { return rr.Hdr.String() + rr.A.String() }
+func (rr *A) len() int           { return rr.Hdr.len() + net.IPv4len }
 
-func (rr *RR_A) String() string {
-	return rr.Hdr.String() + rr.A.String()
-}
-
-func (rr *RR_A) Len() int {
-	return rr.Hdr.Len() + net.IPv4len
-}
-
-func (rr *RR_A) Copy() RR {
-	return &RR_A{*rr.Hdr.CopyHeader(), rr.A}
-}
-
-type RR_AAAA struct {
+type AAAA struct {
 	Hdr  RR_Header
 	AAAA net.IP `dns:"aaaa"`
 }
 
-func (rr *RR_AAAA) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *AAAA) Header() *RR_Header { return &rr.Hdr }
+func (rr *AAAA) copy() RR           { return &AAAA{*rr.Hdr.copyHeader(), rr.AAAA} }
+func (rr *AAAA) String() string     { return rr.Hdr.String() + rr.AAAA.String() }
+func (rr *AAAA) len() int           { return rr.Hdr.len() + net.IPv6len }
 
-func (rr *RR_AAAA) String() string {
-	return rr.Hdr.String() + rr.AAAA.String()
-}
-
-func (rr *RR_AAAA) Len() int {
-	return rr.Hdr.Len() + net.IPv6len
-}
-
-func (rr *RR_AAAA) Copy() RR {
-	return &RR_AAAA{*rr.Hdr.CopyHeader(), rr.AAAA}
-}
-
-type RR_LOC struct {
+type LOC struct {
 	Hdr       RR_Header
 	Version   uint8
 	Size      uint8
@@ -765,11 +654,12 @@ type RR_LOC struct {
 	Altitude  uint32
 }
 
-func (rr *RR_LOC) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *LOC) Header() *RR_Header { return &rr.Hdr }
+func (rr *LOC) copy() RR {
+	return &LOC{*rr.Hdr.copyHeader(), rr.Version, rr.Size, rr.HorizPre, rr.VertPre, rr.Latitude, rr.Longitude, rr.Altitude}
 }
 
-func (rr *RR_LOC) String() string {
+func (rr *LOC) String() string {
 	s := rr.Hdr.String()
 	// Copied from ldns
 	// Latitude
@@ -814,15 +704,11 @@ func (rr *RR_LOC) String() string {
 	return s
 }
 
-func (rr *RR_LOC) Len() int {
-	return rr.Hdr.Len() + 4 + 12
+func (rr *LOC) len() int {
+	return rr.Hdr.len() + 4 + 12
 }
 
-func (rr *RR_LOC) Copy() RR {
-	return &RR_LOC{*rr.Hdr.CopyHeader(), rr.Version, rr.Size, rr.HorizPre, rr.VertPre, rr.Latitude, rr.Longitude, rr.Altitude}
-}
-
-type RR_RRSIG struct {
+type RRSIG struct {
 	Hdr         RR_Header
 	TypeCovered uint16
 	Algorithm   uint8
@@ -835,12 +721,13 @@ type RR_RRSIG struct {
 	Signature   string `dns:"base64"`
 }
 
-func (rr *RR_RRSIG) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *RRSIG) Header() *RR_Header { return &rr.Hdr }
+func (rr *RRSIG) copy() RR {
+	return &RRSIG{*rr.Hdr.copyHeader(), rr.TypeCovered, rr.Algorithm, rr.Labels, rr.OrigTtl, rr.Expiration, rr.Inception, rr.KeyTag, rr.SignerName, rr.Signature}
 }
 
-func (rr *RR_RRSIG) String() string {
-	return rr.Hdr.String() + Rr_str[rr.TypeCovered] +
+func (rr *RRSIG) String() string {
+	return rr.Hdr.String() + TypeToString[rr.TypeCovered] +
 		" " + strconv.Itoa(int(rr.Algorithm)) +
 		" " + strconv.Itoa(int(rr.Labels)) +
 		" " + strconv.FormatInt(int64(rr.OrigTtl), 10) +
@@ -851,30 +738,25 @@ func (rr *RR_RRSIG) String() string {
 		" " + rr.Signature
 }
 
-func (rr *RR_RRSIG) Len() int {
-	return rr.Hdr.Len() + len(rr.SignerName) + 1 +
+func (rr *RRSIG) len() int {
+	return rr.Hdr.len() + len(rr.SignerName) + 1 +
 		base64.StdEncoding.DecodedLen(len(rr.Signature)) + 18
 }
 
-func (rr *RR_RRSIG) Copy() RR {
-	return &RR_RRSIG{*rr.Hdr.CopyHeader(), rr.TypeCovered, rr.Algorithm, rr.Labels, rr.OrigTtl, rr.Expiration, rr.Inception, rr.KeyTag, rr.SignerName, rr.Signature}
-}
-
-type RR_NSEC struct {
+type NSEC struct {
 	Hdr        RR_Header
 	NextDomain string   `dns:"domain-name"`
 	TypeBitMap []uint16 `dns:"nsec"`
 }
 
-func (rr *RR_NSEC) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *NSEC) Header() *RR_Header { return &rr.Hdr }
+func (rr *NSEC) copy() RR           { return &NSEC{*rr.Hdr.copyHeader(), rr.NextDomain, rr.TypeBitMap} }
 
-func (rr *RR_NSEC) String() string {
+func (rr *NSEC) String() string {
 	s := rr.Hdr.String() + rr.NextDomain
 	for i := 0; i < len(rr.TypeBitMap); i++ {
-		if _, ok := Rr_str[rr.TypeBitMap[i]]; ok {
-			s += " " + Rr_str[rr.TypeBitMap[i]]
+		if _, ok := TypeToString[rr.TypeBitMap[i]]; ok {
+			s += " " + TypeToString[rr.TypeBitMap[i]]
 		} else {
 			s += " " + "TYPE" + strconv.Itoa(int(rr.TypeBitMap[i]))
 		}
@@ -882,17 +764,13 @@ func (rr *RR_NSEC) String() string {
 	return s
 }
 
-func (rr *RR_NSEC) Len() int {
+func (rr *NSEC) len() int {
 	l := len(rr.NextDomain) + 1
-	return rr.Hdr.Len() + l + 32 + 1
+	return rr.Hdr.len() + l + 32 + 1
 	// TODO: +32 is max type bitmap
 }
 
-func (rr *RR_NSEC) Copy() RR {
-	return &RR_NSEC{*rr.Hdr.CopyHeader(), rr.NextDomain, rr.TypeBitMap}
-}
-
-type RR_DS struct {
+type DS struct {
 	Hdr        RR_Header
 	KeyTag     uint16
 	Algorithm  uint8
@@ -900,26 +778,23 @@ type RR_DS struct {
 	Digest     string `dns:"hex"`
 }
 
-func (rr *RR_DS) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *DS) Header() *RR_Header { return &rr.Hdr }
+func (rr *DS) copy() RR {
+	return &DS{*rr.Hdr.copyHeader(), rr.KeyTag, rr.Algorithm, rr.DigestType, rr.Digest}
 }
 
-func (rr *RR_DS) String() string {
+func (rr *DS) String() string {
 	return rr.Hdr.String() + strconv.Itoa(int(rr.KeyTag)) +
 		" " + strconv.Itoa(int(rr.Algorithm)) +
 		" " + strconv.Itoa(int(rr.DigestType)) +
 		" " + strings.ToUpper(rr.Digest)
 }
 
-func (rr *RR_DS) Len() int {
-	return rr.Hdr.Len() + 4 + len(rr.Digest)/2
+func (rr *DS) len() int {
+	return rr.Hdr.len() + 4 + len(rr.Digest)/2
 }
 
-func (rr *RR_DS) Copy() RR {
-	return &RR_DS{*rr.Hdr.CopyHeader(), rr.KeyTag, rr.Algorithm, rr.DigestType, rr.Digest}
-}
-
-type RR_DLV struct {
+type CDS struct {
 	Hdr        RR_Header
 	KeyTag     uint16
 	Algorithm  uint8
@@ -927,49 +802,65 @@ type RR_DLV struct {
 	Digest     string `dns:"hex"`
 }
 
-func (rr *RR_DLV) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *CDS) Header() *RR_Header { return &rr.Hdr }
+func (rr *CDS) copy() RR {
+	return &CDS{*rr.Hdr.copyHeader(), rr.KeyTag, rr.Algorithm, rr.DigestType, rr.Digest}
 }
 
-func (rr *RR_DLV) String() string {
+func (rr *CDS) String() string {
 	return rr.Hdr.String() + strconv.Itoa(int(rr.KeyTag)) +
 		" " + strconv.Itoa(int(rr.Algorithm)) +
 		" " + strconv.Itoa(int(rr.DigestType)) +
 		" " + strings.ToUpper(rr.Digest)
 }
 
-func (rr *RR_DLV) Len() int {
-	return rr.Hdr.Len() + 4 + len(rr.Digest)/2
+func (rr *CDS) len() int {
+	return rr.Hdr.len() + 4 + len(rr.Digest)/2
 }
 
-func (rr *RR_DLV) Copy() RR {
-	return &RR_DLV{*rr.Hdr.CopyHeader(), rr.KeyTag, rr.Algorithm, rr.DigestType, rr.Digest}
+type DLV struct {
+	Hdr        RR_Header
+	KeyTag     uint16
+	Algorithm  uint8
+	DigestType uint8
+	Digest     string `dns:"hex"`
 }
 
-type RR_KX struct {
-	Hdr       RR_Header
-	Pref      uint16
-	Exchanger string `dns:"domain-name"`
+func (rr *DLV) Header() *RR_Header { return &rr.Hdr }
+func (rr *DLV) copy() RR {
+	return &DLV{*rr.Hdr.copyHeader(), rr.KeyTag, rr.Algorithm, rr.DigestType, rr.Digest}
 }
 
-func (rr *RR_KX) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *DLV) String() string {
+	return rr.Hdr.String() + strconv.Itoa(int(rr.KeyTag)) +
+		" " + strconv.Itoa(int(rr.Algorithm)) +
+		" " + strconv.Itoa(int(rr.DigestType)) +
+		" " + strings.ToUpper(rr.Digest)
 }
 
-func (rr *RR_KX) String() string {
-	return rr.Hdr.String() + strconv.Itoa(int(rr.Pref)) +
+func (rr *DLV) len() int {
+	return rr.Hdr.len() + 4 + len(rr.Digest)/2
+}
+
+type KX struct {
+	Hdr        RR_Header
+	Preference uint16
+	Exchanger  string `dns:"domain-name"`
+}
+
+func (rr *KX) Header() *RR_Header { return &rr.Hdr }
+func (rr *KX) copy() RR           { return &KX{*rr.Hdr.copyHeader(), rr.Preference, rr.Exchanger} }
+
+func (rr *KX) String() string {
+	return rr.Hdr.String() + strconv.Itoa(int(rr.Preference)) +
 		" " + rr.Exchanger
 }
 
-func (rr *RR_KX) Len() int {
-	return 0
+func (rr *KX) len() int {
+	return rr.Hdr.len() + 2 + len(rr.Exchanger)
 }
 
-func (rr *RR_KX) Copy() RR {
-	return &RR_KX{*rr.Hdr.CopyHeader(), rr.Pref, rr.Exchanger}
-}
-
-type RR_TA struct {
+type TA struct {
 	Hdr        RR_Header
 	KeyTag     uint16
 	Algorithm  uint8
@@ -977,74 +868,63 @@ type RR_TA struct {
 	Digest     string `dns:"hex"`
 }
 
-func (rr *RR_TA) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *TA) Header() *RR_Header { return &rr.Hdr }
+func (rr *TA) copy() RR {
+	return &TA{*rr.Hdr.copyHeader(), rr.KeyTag, rr.Algorithm, rr.DigestType, rr.Digest}
 }
 
-func (rr *RR_TA) String() string {
+func (rr *TA) String() string {
 	return rr.Hdr.String() + strconv.Itoa(int(rr.KeyTag)) +
 		" " + strconv.Itoa(int(rr.Algorithm)) +
 		" " + strconv.Itoa(int(rr.DigestType)) +
 		" " + strings.ToUpper(rr.Digest)
 }
 
-func (rr *RR_TA) Len() int {
-	return rr.Hdr.Len() + 4 + len(rr.Digest)/2
+func (rr *TA) len() int {
+	return rr.Hdr.len() + 4 + len(rr.Digest)/2
 }
 
-func (rr *RR_TA) Copy() RR {
-	return &RR_TA{*rr.Hdr.CopyHeader(), rr.KeyTag, rr.Algorithm, rr.DigestType, rr.Digest}
-}
-
-type RR_TALINK struct {
+type TALINK struct {
 	Hdr          RR_Header
 	PreviousName string `dns:"domain"`
 	NextName     string `dns:"domain"`
 }
 
-func (rr *RR_TALINK) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *TALINK) Header() *RR_Header { return &rr.Hdr }
+func (rr *TALINK) copy() RR           { return &TALINK{*rr.Hdr.copyHeader(), rr.PreviousName, rr.NextName} }
 
-func (rr *RR_TALINK) String() string {
+func (rr *TALINK) String() string {
 	return rr.Hdr.String() +
 		" " + rr.PreviousName + " " + rr.NextName
 }
 
-func (rr *RR_TALINK) Len() int {
-	return rr.Hdr.Len() + len(rr.PreviousName) + len(rr.NextName) + 2
+func (rr *TALINK) len() int {
+	return rr.Hdr.len() + len(rr.PreviousName) + len(rr.NextName) + 2
 }
 
-func (rr *RR_TALINK) Copy() RR {
-	return &RR_TALINK{*rr.Hdr.CopyHeader(), rr.PreviousName, rr.NextName}
-}
-
-type RR_SSHFP struct {
+type SSHFP struct {
 	Hdr         RR_Header
 	Algorithm   uint8
 	Type        uint8
 	FingerPrint string `dns:"hex"`
 }
 
-func (rr *RR_SSHFP) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *SSHFP) Header() *RR_Header { return &rr.Hdr }
+func (rr *SSHFP) copy() RR {
+	return &SSHFP{*rr.Hdr.copyHeader(), rr.Algorithm, rr.Type, rr.FingerPrint}
 }
 
-func (rr *RR_SSHFP) String() string {
+func (rr *SSHFP) String() string {
 	return rr.Hdr.String() + strconv.Itoa(int(rr.Algorithm)) +
 		" " + strconv.Itoa(int(rr.Type)) +
 		" " + strings.ToUpper(rr.FingerPrint)
 }
 
-func (rr *RR_SSHFP) Len() int {
-	return rr.Hdr.Len() + 2 + len(rr.FingerPrint)/2
+func (rr *SSHFP) len() int {
+	return rr.Hdr.len() + 2 + len(rr.FingerPrint)/2
 }
 
-func (rr *RR_SSHFP) Copy() RR {
-	return &RR_SSHFP{*rr.Hdr.CopyHeader(), rr.Algorithm, rr.Type, rr.FingerPrint}
-}
-
-type RR_IPSECKEY struct {
+type IPSECKEY struct {
 	Hdr         RR_Header
 	Precedence  uint8
 	GatewayType uint8
@@ -1053,11 +933,12 @@ type RR_IPSECKEY struct {
 	PublicKey   string `dns:"base64"`
 }
 
-func (rr *RR_IPSECKEY) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *IPSECKEY) Header() *RR_Header { return &rr.Hdr }
+func (rr *IPSECKEY) copy() RR {
+	return &IPSECKEY{*rr.Hdr.copyHeader(), rr.Precedence, rr.GatewayType, rr.Algorithm, rr.Gateway, rr.PublicKey}
 }
 
-func (rr *RR_IPSECKEY) String() string {
+func (rr *IPSECKEY) String() string {
 	return rr.Hdr.String() + strconv.Itoa(int(rr.Precedence)) +
 		" " + strconv.Itoa(int(rr.GatewayType)) +
 		" " + strconv.Itoa(int(rr.Algorithm)) +
@@ -1065,16 +946,12 @@ func (rr *RR_IPSECKEY) String() string {
 		" " + rr.PublicKey
 }
 
-func (rr *RR_IPSECKEY) Len() int {
-	return rr.Hdr.Len() + 3 + len(rr.Gateway) + 1 +
+func (rr *IPSECKEY) len() int {
+	return rr.Hdr.len() + 3 + len(rr.Gateway) + 1 +
 		base64.StdEncoding.DecodedLen(len(rr.PublicKey))
 }
 
-func (rr *RR_IPSECKEY) Copy() RR {
-	return &RR_IPSECKEY{*rr.Hdr.CopyHeader(), rr.Precedence, rr.GatewayType, rr.Algorithm, rr.Gateway, rr.PublicKey}
-}
-
-type RR_DNSKEY struct {
+type DNSKEY struct {
 	Hdr       RR_Header
 	Flags     uint16
 	Protocol  uint8
@@ -1082,27 +959,49 @@ type RR_DNSKEY struct {
 	PublicKey string `dns:"base64"`
 }
 
-func (rr *RR_DNSKEY) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *DNSKEY) Header() *RR_Header { return &rr.Hdr }
+func (rr *DNSKEY) copy() RR {
+	return &DNSKEY{*rr.Hdr.copyHeader(), rr.Flags, rr.Protocol, rr.Algorithm, rr.PublicKey}
 }
 
-func (rr *RR_DNSKEY) String() string {
+func (rr *DNSKEY) String() string {
 	return rr.Hdr.String() + strconv.Itoa(int(rr.Flags)) +
 		" " + strconv.Itoa(int(rr.Protocol)) +
 		" " + strconv.Itoa(int(rr.Algorithm)) +
 		" " + rr.PublicKey
 }
 
-func (rr *RR_DNSKEY) Len() int {
-	return rr.Hdr.Len() + 4 +
+func (rr *DNSKEY) len() int {
+	return rr.Hdr.len() + 4 +
 		base64.StdEncoding.DecodedLen(len(rr.PublicKey))
 }
 
-func (rr *RR_DNSKEY) Copy() RR {
-	return &RR_DNSKEY{*rr.Hdr.CopyHeader(), rr.Flags, rr.Protocol, rr.Algorithm, rr.PublicKey}
+type RKEY struct {
+	Hdr       RR_Header
+	Flags     uint16
+	Protocol  uint8
+	Algorithm uint8
+	PublicKey string `dns:"base64"`
 }
 
-type RR_NSEC3 struct {
+func (rr *RKEY) Header() *RR_Header { return &rr.Hdr }
+func (rr *RKEY) copy() RR {
+	return &RKEY{*rr.Hdr.copyHeader(), rr.Flags, rr.Protocol, rr.Algorithm, rr.PublicKey}
+}
+
+func (rr *RKEY) String() string {
+	return rr.Hdr.String() + strconv.Itoa(int(rr.Flags)) +
+		" " + strconv.Itoa(int(rr.Protocol)) +
+		" " + strconv.Itoa(int(rr.Algorithm)) +
+		" " + rr.PublicKey
+}
+
+func (rr *RKEY) len() int {
+	return rr.Hdr.len() + 4 +
+		base64.StdEncoding.DecodedLen(len(rr.PublicKey))
+}
+
+type NSEC3 struct {
 	Hdr        RR_Header
 	Hash       uint8
 	Flags      uint8
@@ -1114,20 +1013,21 @@ type RR_NSEC3 struct {
 	TypeBitMap []uint16 `dns:"nsec"`
 }
 
-func (rr *RR_NSEC3) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *NSEC3) Header() *RR_Header { return &rr.Hdr }
+func (rr *NSEC3) copy() RR {
+	return &NSEC3{*rr.Hdr.copyHeader(), rr.Hash, rr.Flags, rr.Iterations, rr.SaltLength, rr.Salt, rr.HashLength, rr.NextDomain, rr.TypeBitMap}
 }
 
-func (rr *RR_NSEC3) String() string {
+func (rr *NSEC3) String() string {
 	s := rr.Hdr.String()
 	s += strconv.Itoa(int(rr.Hash)) +
 		" " + strconv.Itoa(int(rr.Flags)) +
 		" " + strconv.Itoa(int(rr.Iterations)) +
-		" " + saltString(rr.Salt) +
+		" " + saltToString(rr.Salt) +
 		" " + rr.NextDomain
 	for i := 0; i < len(rr.TypeBitMap); i++ {
-		if _, ok := Rr_str[rr.TypeBitMap[i]]; ok {
-			s += " " + Rr_str[rr.TypeBitMap[i]]
+		if _, ok := TypeToString[rr.TypeBitMap[i]]; ok {
+			s += " " + TypeToString[rr.TypeBitMap[i]]
 		} else {
 			s += " " + "TYPE" + strconv.Itoa(int(rr.TypeBitMap[i]))
 		}
@@ -1135,16 +1035,12 @@ func (rr *RR_NSEC3) String() string {
 	return s
 }
 
-func (rr *RR_NSEC3) Len() int {
-	return rr.Hdr.Len() + 6 + len(rr.Salt)/2 + 1 + len(rr.NextDomain) + 1 + 32
+func (rr *NSEC3) len() int {
+	return rr.Hdr.len() + 6 + len(rr.Salt)/2 + 1 + len(rr.NextDomain) + 1 + 32
 	// TODO: +32 is MAX type bit map
 }
 
-func (rr *RR_NSEC3) Copy() RR {
-	return &RR_NSEC3{*rr.Hdr.CopyHeader(), rr.Hash, rr.Flags, rr.Iterations, rr.SaltLength, rr.Salt, rr.HashLength, rr.NextDomain, rr.TypeBitMap}
-}
-
-type RR_NSEC3PARAM struct {
+type NSEC3PARAM struct {
 	Hdr        RR_Header
 	Hash       uint8
 	Flags      uint8
@@ -1153,28 +1049,25 @@ type RR_NSEC3PARAM struct {
 	Salt       string `dns:"hex"`
 }
 
-func (rr *RR_NSEC3PARAM) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *NSEC3PARAM) Header() *RR_Header { return &rr.Hdr }
+func (rr *NSEC3PARAM) copy() RR {
+	return &NSEC3PARAM{*rr.Hdr.copyHeader(), rr.Hash, rr.Flags, rr.Iterations, rr.SaltLength, rr.Salt}
 }
 
-func (rr *RR_NSEC3PARAM) String() string {
+func (rr *NSEC3PARAM) String() string {
 	s := rr.Hdr.String()
 	s += strconv.Itoa(int(rr.Hash)) +
 		" " + strconv.Itoa(int(rr.Flags)) +
 		" " + strconv.Itoa(int(rr.Iterations)) +
-		" " + saltString(rr.Salt)
+		" " + saltToString(rr.Salt)
 	return s
 }
 
-func (rr *RR_NSEC3PARAM) Len() int {
-	return rr.Hdr.Len() + 2 + 4 + 1 + len(rr.Salt)/2
+func (rr *NSEC3PARAM) len() int {
+	return rr.Hdr.len() + 2 + 4 + 1 + len(rr.Salt)/2
 }
 
-func (rr *RR_NSEC3PARAM) Copy() RR {
-	return &RR_NSEC3PARAM{*rr.Hdr.CopyHeader(), rr.Hash, rr.Flags, rr.Iterations, rr.SaltLength, rr.Salt}
-}
-
-type RR_TKEY struct {
+type TKEY struct {
 	Hdr        RR_Header
 	Algorithm  string `dns:"domain-name"`
 	Inception  uint32
@@ -1187,96 +1080,85 @@ type RR_TKEY struct {
 	OtherData  string
 }
 
-func (rr *RR_TKEY) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *TKEY) Header() *RR_Header { return &rr.Hdr }
+func (rr *TKEY) copy() RR {
+	return &TKEY{*rr.Hdr.copyHeader(), rr.Algorithm, rr.Inception, rr.Expiration, rr.Mode, rr.Error, rr.KeySize, rr.Key, rr.OtherLen, rr.OtherData}
 }
 
-func (rr *RR_TKEY) String() string {
+func (rr *TKEY) String() string {
 	// It has no presentation format
 	return ""
 }
 
-func (rr *RR_TKEY) Len() int {
-	return rr.Hdr.Len() + len(rr.Algorithm) + 1 + 4 + 4 + 6 +
+func (rr *TKEY) len() int {
+	return rr.Hdr.len() + len(rr.Algorithm) + 1 + 4 + 4 + 6 +
 		len(rr.Key) + 2 + len(rr.OtherData)
 }
 
-func (rr *RR_TKEY) Copy() RR {
-	return &RR_TKEY{*rr.Hdr.CopyHeader(), rr.Algorithm, rr.Inception, rr.Expiration, rr.Mode, rr.Error, rr.KeySize, rr.Key, rr.OtherLen, rr.OtherData}
-}
-
-// RR_RFC3597 representes an unknown RR.
-type RR_RFC3597 struct {
+// RFC3597 representes an unknown RR.
+type RFC3597 struct {
 	Hdr   RR_Header
 	Rdata string `dns:"hex"`
 }
 
-func (rr *RR_RFC3597) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *RFC3597) Header() *RR_Header { return &rr.Hdr }
+func (rr *RFC3597) copy() RR           { return &RFC3597{*rr.Hdr.copyHeader(), rr.Rdata} }
 
-func (rr *RR_RFC3597) String() string {
+func (rr *RFC3597) String() string {
 	s := rr.Hdr.String()
 	s += "\\# " + strconv.Itoa(len(rr.Rdata)/2) + " " + rr.Rdata
 	return s
 }
 
-func (rr *RR_RFC3597) Len() int {
-	return rr.Hdr.Len() + len(rr.Rdata)/2
+func (rr *RFC3597) len() int {
+	return rr.Hdr.len() + len(rr.Rdata)/2
 }
 
-func (rr *RR_RFC3597) Copy() RR {
-	return &RR_RFC3597{*rr.Hdr.CopyHeader(), rr.Rdata}
-}
-
-type RR_URI struct {
+type URI struct {
 	Hdr      RR_Header
 	Priority uint16
 	Weight   uint16
-	Target   string `dns:"txt"`
+	Target   []string `dns:"txt"`
 }
 
-func (rr *RR_URI) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *URI) Header() *RR_Header { return &rr.Hdr }
+func (rr *URI) copy() RR           { return &URI{*rr.Hdr.copyHeader(), rr.Weight, rr.Priority, rr.Target} }
+
+func (rr *URI) String() string {
+	s := rr.Hdr.String() + strconv.Itoa(int(rr.Priority)) +
+		" " + strconv.Itoa(int(rr.Weight))
+	for i, s1 := range rr.Target {
+		if i > 0 {
+			s += " " + strconv.QuoteToASCII(s1)
+		} else {
+			s += strconv.QuoteToASCII(s1)
+		}
+	}
+	return s
 }
 
-func (rr *RR_URI) String() string {
-	return rr.Hdr.String() + strconv.Itoa(int(rr.Priority)) +
-		" " + strconv.Itoa(int(rr.Weight)) +
-		" " + rr.Target
+func (rr *URI) len() int {
+	return rr.Hdr.len() + 4 + len(rr.Target) + 1
 }
 
-func (rr *RR_URI) Len() int {
-	return rr.Hdr.Len() + 4 + len(rr.Target) + 1
-}
-
-func (rr *RR_URI) Copy() RR {
-	return &RR_URI{*rr.Hdr.CopyHeader(), rr.Weight, rr.Priority, rr.Target}
-}
-
-type RR_DHCID struct {
+type DHCID struct {
 	Hdr    RR_Header
 	Digest string `dns:"base64"`
 }
 
-func (rr *RR_DHCID) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *DHCID) Header() *RR_Header { return &rr.Hdr }
+func (rr *DHCID) copy() RR           { return &DHCID{*rr.Hdr.copyHeader(), rr.Digest} }
 
-func (rr *RR_DHCID) String() string {
+func (rr *DHCID) String() string {
 	return rr.Hdr.String() + rr.Digest
 }
 
-func (rr *RR_DHCID) Len() int {
-	return rr.Hdr.Len() +
+func (rr *DHCID) len() int {
+	return rr.Hdr.len() +
 		base64.StdEncoding.DecodedLen(len(rr.Digest))
 }
 
-func (rr *RR_DHCID) Copy() RR {
-	return &RR_DHCID{*rr.Hdr.CopyHeader(), rr.Digest}
-}
-
-type RR_TLSA struct {
+type TLSA struct {
 	Hdr          RR_Header
 	Usage        uint8
 	Selector     uint8
@@ -1284,11 +1166,12 @@ type RR_TLSA struct {
 	Certificate  string `dns:"hex"`
 }
 
-func (rr *RR_TLSA) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *TLSA) Header() *RR_Header { return &rr.Hdr }
+func (rr *TLSA) copy() RR {
+	return &TLSA{*rr.Hdr.copyHeader(), rr.Usage, rr.Selector, rr.MatchingType, rr.Certificate}
 }
 
-func (rr *RR_TLSA) String() string {
+func (rr *TLSA) String() string {
 	return rr.Hdr.String() +
 		" " + strconv.Itoa(int(rr.Usage)) +
 		" " + strconv.Itoa(int(rr.Selector)) +
@@ -1296,15 +1179,11 @@ func (rr *RR_TLSA) String() string {
 		" " + rr.Certificate
 }
 
-func (rr *RR_TLSA) Len() int {
-	return rr.Hdr.Len() + 3 + len(rr.Certificate)/2
+func (rr *TLSA) len() int {
+	return rr.Hdr.len() + 3 + len(rr.Certificate)/2
 }
 
-func (rr *RR_TLSA) Copy() RR {
-	return &RR_TLSA{*rr.Hdr.CopyHeader(), rr.Usage, rr.Selector, rr.MatchingType, rr.Certificate}
-}
-
-type RR_HIP struct {
+type HIP struct {
 	Hdr                RR_Header
 	HitLength          uint8
 	PublicKeyAlgorithm uint8
@@ -1314,11 +1193,12 @@ type RR_HIP struct {
 	RendezvousServers  []string `dns:"domain-name"`
 }
 
-func (rr *RR_HIP) Header() *RR_Header {
-	return &rr.Hdr
+func (rr *HIP) Header() *RR_Header { return &rr.Hdr }
+func (rr *HIP) copy() RR {
+	return &HIP{*rr.Hdr.copyHeader(), rr.HitLength, rr.PublicKeyAlgorithm, rr.PublicKeyLength, rr.Hit, rr.PublicKey, rr.RendezvousServers}
 }
 
-func (rr *RR_HIP) String() string {
+func (rr *HIP) String() string {
 	s := rr.Hdr.String() +
 		" " + strconv.Itoa(int(rr.PublicKeyAlgorithm)) +
 		" " + rr.Hit +
@@ -1329,8 +1209,8 @@ func (rr *RR_HIP) String() string {
 	return s
 }
 
-func (rr *RR_HIP) Len() int {
-	l := rr.Hdr.Len() + 4 +
+func (rr *HIP) len() int {
+	l := rr.Hdr.len() + 4 +
 		len(rr.Hit)/2 +
 		base64.StdEncoding.DecodedLen(len(rr.PublicKey))
 	for _, d := range rr.RendezvousServers {
@@ -1339,22 +1219,45 @@ func (rr *RR_HIP) Len() int {
 	return l
 }
 
-func (rr *RR_HIP) Copy() RR {
-	return &RR_HIP{*rr.Hdr.CopyHeader(), rr.HitLength, rr.PublicKeyAlgorithm, rr.PublicKeyLength, rr.Hit, rr.PublicKey, rr.RendezvousServers}
+type NINFO struct {
+	Hdr    RR_Header
+	ZSData []string `dns:"txt"`
 }
 
-type RR_WKS struct {
+func (rr *NINFO) Header() *RR_Header { return &rr.Hdr }
+func (rr *NINFO) copy() RR           { return &NINFO{*rr.Hdr.copyHeader(), rr.ZSData} }
+
+func (rr *NINFO) String() string {
+	s := rr.Hdr.String()
+	for i, s1 := range rr.ZSData {
+		if i > 0 {
+			s += " " + strconv.QuoteToASCII(s1)
+		} else {
+			s += strconv.QuoteToASCII(s1)
+		}
+	}
+	return s
+}
+
+func (rr *NINFO) len() int {
+	l := rr.Hdr.len()
+	for _, t := range rr.ZSData {
+		l += len(t)
+	}
+	return l
+}
+
+type WKS struct {
 	Hdr      RR_Header
 	Address  net.IP `dns:"a"`
 	Protocol uint8
 	BitMap   []uint16 `dns:"wks"`
 }
 
-func (rr *RR_WKS) Header() *RR_Header {
-	return &rr.Hdr
-}
+func (rr *WKS) Header() *RR_Header { return &rr.Hdr }
+func (rr *WKS) copy() RR           { return &WKS{*rr.Hdr.copyHeader(), rr.Address, rr.Protocol, rr.BitMap} }
 
-func (rr *RR_WKS) String() string {
+func (rr *WKS) String() string {
 	s := rr.Hdr.String() + rr.Address.String()
 	for i := 0; i < len(rr.BitMap); i++ {
 		// should lookup the port
@@ -1363,13 +1266,160 @@ func (rr *RR_WKS) String() string {
 	return s
 }
 
-func (rr *RR_WKS) Len() int {
-	return rr.Hdr.Len() + net.IPv4len + 1
+func (rr *WKS) len() int {
+	return rr.Hdr.len() + net.IPv4len + 1
 }
 
-func (rr *RR_WKS) Copy() RR {
-	return &RR_WKS{*rr.Hdr.CopyHeader(), rr.Address, rr.Protocol, rr.BitMap}
+type NID struct {
+	Hdr        RR_Header
+	Preference uint16
+	NodeID     uint64
 }
+
+func (rr *NID) Header() *RR_Header { return &rr.Hdr }
+func (rr *NID) copy() RR           { return &NID{*rr.Hdr.copyHeader(), rr.Preference, rr.NodeID} }
+
+func (rr *NID) String() string {
+	s := rr.Hdr.String() + strconv.Itoa(int(rr.Preference))
+	node := fmt.Sprintf("%0.16x", rr.NodeID)
+	s += " " + node[0:4] + ":" + node[4:8] + ":" + node[8:12] + ":" + node[12:16]
+	return s
+}
+
+func (rr *NID) len() int {
+	return rr.Hdr.len() + 2 + 8
+}
+
+type L32 struct {
+	Hdr        RR_Header
+	Preference uint16
+	Locator32  net.IP `dns:"a"`
+}
+
+func (rr *L32) Header() *RR_Header { return &rr.Hdr }
+func (rr *L32) copy() RR           { return &L32{*rr.Hdr.copyHeader(), rr.Preference, rr.Locator32} }
+
+func (rr *L32) String() string {
+	return rr.Hdr.String() + strconv.Itoa(int(rr.Preference)) +
+		" " + rr.Locator32.String()
+}
+
+func (rr *L32) len() int {
+	return rr.Hdr.len() + net.IPv4len
+}
+
+type L64 struct {
+	Hdr        RR_Header
+	Preference uint16
+	Locator64  uint64
+}
+
+func (rr *L64) Header() *RR_Header { return &rr.Hdr }
+func (rr *L64) copy() RR           { return &L64{*rr.Hdr.copyHeader(), rr.Preference, rr.Locator64} }
+
+func (rr *L64) String() string {
+	s := rr.Hdr.String() + strconv.Itoa(int(rr.Preference))
+	node := fmt.Sprintf("%0.16X", rr.Locator64)
+	s += " " + node[0:4] + ":" + node[4:8] + ":" + node[8:12] + ":" + node[12:16]
+	return s
+}
+
+func (rr *L64) len() int {
+	return rr.Hdr.len() + 2 + 8
+}
+
+type LP struct {
+	Hdr        RR_Header
+	Preference uint16
+	Fqdn       string `dns:"domain-name"`
+}
+
+func (rr *LP) Header() *RR_Header { return &rr.Hdr }
+func (rr *LP) copy() RR           { return &LP{*rr.Hdr.copyHeader(), rr.Preference, rr.Fqdn} }
+func (rr *LP) String() string {
+	return rr.Hdr.String() + strconv.Itoa(int(rr.Preference)) + " " + rr.Fqdn
+}
+func (rr *LP) len() int { return rr.Hdr.len() + 2 + len(rr.Fqdn) + 1 }
+
+type EUI48 struct {
+	Hdr     RR_Header
+	Address uint64 `dns:"uint48"`
+}
+
+func (rr *EUI48) Header() *RR_Header { return &rr.Hdr }
+func (rr *EUI48) copy() RR           { return &EUI48{*rr.Hdr.copyHeader(), rr.Address} }
+func (rr *EUI48) String() string     { return rr.Hdr.String() + euiToString(rr.Address, 48) }
+func (rr *EUI48) len() int           { return rr.Hdr.len() + 6 }
+
+type EUI64 struct {
+	Hdr     RR_Header
+	Address uint64
+}
+
+func (rr *EUI64) Header() *RR_Header { return &rr.Hdr }
+func (rr *EUI64) copy() RR           { return &EUI64{*rr.Hdr.copyHeader(), rr.Address} }
+func (rr *EUI64) String() string     { return rr.Hdr.String() + euiToString(rr.Address, 64) }
+func (rr *EUI64) len() int           { return rr.Hdr.len() + 8 }
+
+type CAA struct {
+	Hdr   RR_Header
+	Flag  uint8
+	Tag   string
+	Value []string `dns:"txt"`
+}
+
+func (rr *CAA) Header() *RR_Header { return &rr.Hdr }
+func (rr *CAA) copy() RR           { return &CAA{*rr.Hdr.copyHeader(), rr.Flag, rr.Tag, rr.Value} }
+
+func (rr *CAA) String() string {
+	s := rr.Hdr.String() + strconv.FormatInt(int64(rr.Flag), 10) + " " + rr.Tag
+	for i, s1 := range rr.Value {
+		if i > 0 {
+			s += " " + strconv.QuoteToASCII(s1)
+		} else {
+			s += strconv.QuoteToASCII(s1)
+		}
+	}
+	return s
+}
+
+func (rr *CAA) len() int {
+	l := rr.Hdr.len() + 1 + len(rr.Tag)
+	for _, t := range rr.Value {
+		l += len(t)
+	}
+	return l
+}
+
+type UID struct {
+	Hdr RR_Header
+	Uid uint32
+}
+
+func (rr *UID) Header() *RR_Header { return &rr.Hdr }
+func (rr *UID) copy() RR           { return &UID{*rr.Hdr.copyHeader(), rr.Uid} }
+func (rr *UID) String() string     { return rr.Hdr.String() + strconv.FormatInt(int64(rr.Uid), 10) }
+func (rr *UID) len() int           { return rr.Hdr.len() + 4 }
+
+type GID struct {
+	Hdr RR_Header
+	Gid uint32
+}
+
+func (rr *GID) Header() *RR_Header { return &rr.Hdr }
+func (rr *GID) copy() RR           { return &GID{*rr.Hdr.copyHeader(), rr.Gid} }
+func (rr *GID) String() string     { return rr.Hdr.String() + strconv.FormatInt(int64(rr.Gid), 10) }
+func (rr *GID) len() int           { return rr.Hdr.len() + 4 }
+
+type UINFO struct {
+	Hdr   RR_Header
+	Uinfo string
+}
+
+func (rr *UINFO) Header() *RR_Header { return &rr.Hdr }
+func (rr *UINFO) copy() RR           { return &UINFO{*rr.Hdr.copyHeader(), rr.Uinfo} }
+func (rr *UINFO) String() string     { return rr.Hdr.String() + strconv.QuoteToASCII(rr.Uinfo) }
+func (rr *UINFO) len() int           { return rr.Hdr.len() + len(rr.Uinfo) + 1 }
 
 // TimeToString translates the RRSIG's incep. and expir. times to the
 // string representation used when printing the record.
@@ -1383,7 +1433,7 @@ func TimeToString(t uint32) string {
 	return ti.Format("20060102150405")
 }
 
-// StringToTime translates the RRSIG's incep. and expir. times from 
+// StringToTime translates the RRSIG's incep. and expir. times from
 // string values like "20110403154150" to an 32 bit integer.
 // It takes serial arithmetic (RFC 1982) into account.
 func StringToTime(s string) (uint32, error) {
@@ -1398,9 +1448,9 @@ func StringToTime(s string) (uint32, error) {
 	return uint32(t.Unix() - (mod * year68)), nil
 }
 
-// saltString converts a NSECX salt to uppercase and
+// saltToString converts a NSECX salt to uppercase and
 // returns "-" when it is empty
-func saltString(s string) string {
+func saltToString(s string) string {
 	if len(s) == 0 {
 		return "-"
 	}
@@ -1424,49 +1474,77 @@ func cmToString(mantissa, exponent uint8) string {
 	panic("dns: not reached")
 }
 
+func euiToString(eui uint64, bits int) (hex string) {
+	switch bits {
+	case 64:
+		hex = fmt.Sprintf("%16.16x", eui)
+		hex = hex[0:2] + "-" + hex[2:4] + "-" + hex[4:6] + "-" + hex[6:8] +
+			"-" + hex[8:10] + "-" + hex[10:12] + "-" + hex[12:14] + "-" + hex[14:16]
+	case 48:
+		hex = fmt.Sprintf("%12.12x", eui)
+		hex = hex[0:2] + "-" + hex[2:4] + "-" + hex[4:6] + "-" + hex[6:8] +
+			"-" + hex[8:10] + "-" + hex[10:12]
+	}
+	return
+}
+
 // Map of constructors for each RR wire type.
 var rr_mk = map[uint16]func() RR{
-	TypeCNAME:      func() RR { return new(RR_CNAME) },
-	TypeHINFO:      func() RR { return new(RR_HINFO) },
-	TypeMB:         func() RR { return new(RR_MB) },
-	TypeMG:         func() RR { return new(RR_MG) },
-	TypeMD:         func() RR { return new(RR_MD) },
-	TypeMF:         func() RR { return new(RR_MF) },
-	TypeMINFO:      func() RR { return new(RR_MINFO) },
-	TypeRP:         func() RR { return new(RR_RP) },
-	TypeAFSDB:      func() RR { return new(RR_AFSDB) },
-	TypeMR:         func() RR { return new(RR_MR) },
-	TypeMX:         func() RR { return new(RR_MX) },
-	TypeNS:         func() RR { return new(RR_NS) },
-	TypePTR:        func() RR { return new(RR_PTR) },
-	TypeSOA:        func() RR { return new(RR_SOA) },
-	TypeRT:         func() RR { return new(RR_RT) },
-	TypeTXT:        func() RR { return new(RR_TXT) },
-	TypeSRV:        func() RR { return new(RR_SRV) },
-	TypeNAPTR:      func() RR { return new(RR_NAPTR) },
-	TypeDNAME:      func() RR { return new(RR_DNAME) },
-	TypeA:          func() RR { return new(RR_A) },
-	TypeWKS:        func() RR { return new(RR_WKS) },
-	TypeAAAA:       func() RR { return new(RR_AAAA) },
-	TypeLOC:        func() RR { return new(RR_LOC) },
-	TypeOPT:        func() RR { return new(RR_OPT) },
-	TypeDS:         func() RR { return new(RR_DS) },
-	TypeCERT:       func() RR { return new(RR_CERT) },
-	TypeKX:         func() RR { return new(RR_KX) },
-	TypeSPF:        func() RR { return new(RR_SPF) },
-	TypeTALINK:     func() RR { return new(RR_TALINK) },
-	TypeSSHFP:      func() RR { return new(RR_SSHFP) },
-	TypeRRSIG:      func() RR { return new(RR_RRSIG) },
-	TypeNSEC:       func() RR { return new(RR_NSEC) },
-	TypeDNSKEY:     func() RR { return new(RR_DNSKEY) },
-	TypeNSEC3:      func() RR { return new(RR_NSEC3) },
-	TypeDHCID:      func() RR { return new(RR_DHCID) },
-	TypeNSEC3PARAM: func() RR { return new(RR_NSEC3PARAM) },
-	TypeTKEY:       func() RR { return new(RR_TKEY) },
-	TypeTSIG:       func() RR { return new(RR_TSIG) },
-	TypeURI:        func() RR { return new(RR_URI) },
-	TypeTA:         func() RR { return new(RR_TA) },
-	TypeDLV:        func() RR { return new(RR_DLV) },
-	TypeTLSA:       func() RR { return new(RR_TLSA) },
-	TypeHIP:        func() RR { return new(RR_HIP) },
+	TypeCNAME:      func() RR { return new(CNAME) },
+	TypeHINFO:      func() RR { return new(HINFO) },
+	TypeMB:         func() RR { return new(MB) },
+	TypeMG:         func() RR { return new(MG) },
+	TypeMD:         func() RR { return new(MD) },
+	TypeMF:         func() RR { return new(MF) },
+	TypeMINFO:      func() RR { return new(MINFO) },
+	TypeRP:         func() RR { return new(RP) },
+	TypeAFSDB:      func() RR { return new(AFSDB) },
+	TypeX25:        func() RR { return new(X25) },
+	TypeMR:         func() RR { return new(MR) },
+	TypeMX:         func() RR { return new(MX) },
+	TypeRKEY:       func() RR { return new(RKEY) },
+	TypeNINFO:      func() RR { return new(NINFO) },
+	TypeNS:         func() RR { return new(NS) },
+	TypePTR:        func() RR { return new(PTR) },
+	TypeSOA:        func() RR { return new(SOA) },
+	TypeRT:         func() RR { return new(RT) },
+	TypeTXT:        func() RR { return new(TXT) },
+	TypeSRV:        func() RR { return new(SRV) },
+	TypeNAPTR:      func() RR { return new(NAPTR) },
+	TypeDNAME:      func() RR { return new(DNAME) },
+	TypeA:          func() RR { return new(A) },
+	TypeWKS:        func() RR { return new(WKS) },
+	TypeAAAA:       func() RR { return new(AAAA) },
+	TypeLOC:        func() RR { return new(LOC) },
+	TypeOPT:        func() RR { return new(OPT) },
+	TypeDS:         func() RR { return new(DS) },
+	TypeCDS:        func() RR { return new(CDS) },
+	TypeCERT:       func() RR { return new(CERT) },
+	TypeKX:         func() RR { return new(KX) },
+	TypeSPF:        func() RR { return new(SPF) },
+	TypeTALINK:     func() RR { return new(TALINK) },
+	TypeSSHFP:      func() RR { return new(SSHFP) },
+	TypeRRSIG:      func() RR { return new(RRSIG) },
+	TypeNSEC:       func() RR { return new(NSEC) },
+	TypeDNSKEY:     func() RR { return new(DNSKEY) },
+	TypeNSEC3:      func() RR { return new(NSEC3) },
+	TypeDHCID:      func() RR { return new(DHCID) },
+	TypeNSEC3PARAM: func() RR { return new(NSEC3PARAM) },
+	TypeTKEY:       func() RR { return new(TKEY) },
+	TypeTSIG:       func() RR { return new(TSIG) },
+	TypeURI:        func() RR { return new(URI) },
+	TypeTA:         func() RR { return new(TA) },
+	TypeDLV:        func() RR { return new(DLV) },
+	TypeTLSA:       func() RR { return new(TLSA) },
+	TypeHIP:        func() RR { return new(HIP) },
+	TypeNID:        func() RR { return new(NID) },
+	TypeL32:        func() RR { return new(L32) },
+	TypeL64:        func() RR { return new(L64) },
+	TypeLP:         func() RR { return new(LP) },
+	TypeEUI48:      func() RR { return new(EUI48) },
+	TypeEUI64:      func() RR { return new(EUI64) },
+	TypeCAA:        func() RR { return new(CAA) },
+	TypeUID:        func() RR { return new(UID) },
+	TypeGID:        func() RR { return new(GID) },
+	TypeUINFO:      func() RR { return new(UINFO) },
 }

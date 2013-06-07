@@ -1,11 +1,16 @@
+// Copyright 2011 Miek Gieben. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // EDNS0
 //
-// EDNS0 is an extension mechanism for the DNS defined in RFC 2671. It defines a 
-// standard RR type, the OPT RR, which is then completely abused. 
+// EDNS0 is an extension mechanism for the DNS defined in RFC 2671 and updated
+// by RFC 6891. It defines a standard RR type, the OPT RR, which is then completely 
+// abused.
 // Basic use pattern for creating an (empty) OPT RR:
 //
-//	o := new(dns.RR_OPT)
-//	o.Hdr.Name = "."
+//	o := new(dns.OPT)
+//	o.Hdr.Name = "." // MUST be the root zone, per definition.
 //	o.Hdr.Rrtype = dns.TypeOPT
 //
 // The rdata of an OPT RR consists out of a slice of EDNS0 interfaces. Currently
@@ -13,8 +18,8 @@
 // these options may be combined in an OPT RR.
 // Basic use pattern for a server to check if (and which) options are set:
 //
-//	// o is a dns.RR_OPT
-//	for _, s := range o.Options {
+//	// o is a dns.OPT
+//	for _, s := range o.Option {
 //		switch e := s.(type) {
 //		case *dns.EDNS0_NSID:
 //			// do stuff with e.Nsid
@@ -33,24 +38,26 @@ import (
 
 // EDNS0 Option codes.
 const (
-	_           = iota
-	EDNS0LLQ             // not used
-	EDNS0UL              // not used
-	EDNS0NSID            // nsid (RFC5001)
-	EDNS0SUBNET = 0x50fa // client-subnet draft
+	EDNS0LLQ    = 0x1    // long lived queries: http://tools.ietf.org/html/draft-sekar-dns-llq-01
+	EDNS0UL     = 0x2    // update lease draft: http://files.dns-sd.org/draft-sekar-dns-ul.txt
+	EDNS0NSID   = 0x3    // nsid (RFC5001)
+	EDNS0SUBNET = 0x50fa // client-subnet draft: http://tools.ietf.org/html/draft-vandergaast-edns-client-subnet-01
+	EDNS0DAU    = 0x5    // DNSSEC Algorithm Understood - not the final number!
+	EDNS0DHU    = 0x6    // DS Hash Understood - not the final number!
+	EDNS0N3U    = 0x7    // NSEC3 Hash Understood - not the final number!
 	_DO         = 1 << 7 // dnssec ok
 )
 
-type RR_OPT struct {
+type OPT struct {
 	Hdr    RR_Header
 	Option []EDNS0 `dns:"opt"`
 }
 
-func (rr *RR_OPT) Header() *RR_Header {
+func (rr *OPT) Header() *RR_Header {
 	return &rr.Hdr
 }
 
-func (rr *RR_OPT) String() string {
+func (rr *OPT) String() string {
 	s := "\n;; OPT PSEUDOSECTION:\n; EDNS: version " + strconv.Itoa(int(rr.Version())) + "; "
 	if rr.Do() {
 		s += "flags: do; "
@@ -73,13 +80,23 @@ func (rr *RR_OPT) String() string {
 			}
 		case *EDNS0_SUBNET:
 			s += "\n; SUBNET: " + o.String()
+		case *EDNS0_UL:
+			s += "\n; UPDATE LEASE: " + o.String()
+		case *EDNS0_LLQ:
+			s += "\n; LONG LIVED QUERIES: " + o.String()
+		case *EDNS0_DAU:
+			s += "\n; DNSSEC ALGORITHM UNDERSTOOD: " + o.String()
+		case *EDNS0_DHU:
+			s += "\n; DS HASH UNDERSTOOD: " + o.String()
+		case *EDNS0_N3U:
+			s += "\n; NSEC3 HASH UNDERSTOOD: " + o.String()
 		}
 	}
 	return s
 }
 
-func (rr *RR_OPT) Len() int {
-	l := rr.Hdr.Len()
+func (rr *OPT) len() int {
+	l := rr.Hdr.len()
 	for i := 0; i < len(rr.Option); i++ {
 		lo, _ := rr.Option[i].pack()
 		l += 2 + len(lo)
@@ -87,37 +104,37 @@ func (rr *RR_OPT) Len() int {
 	return l
 }
 
-func (rr *RR_OPT) Copy() RR {
-	return &RR_OPT{*rr.Hdr.CopyHeader(), rr.Option}
+func (rr *OPT) copy() RR {
+	return &OPT{*rr.Hdr.copyHeader(), rr.Option}
 }
 
 // Version returns the EDNS version used. Only zero is defined.
-func (rr *RR_OPT) Version() uint8 {
+func (rr *OPT) Version() uint8 {
 	return uint8(rr.Hdr.Ttl & 0x00FF00FFFF)
 }
 
 // SetVersion sets the version of EDNS. This is usually zero.
-func (rr *RR_OPT) SetVersion(v uint8) {
+func (rr *OPT) SetVersion(v uint8) {
 	rr.Hdr.Ttl = rr.Hdr.Ttl&0xFF00FFFF | uint32(v)
 }
 
 // UDPSize returns the UDP buffer size.
-func (rr *RR_OPT) UDPSize() uint16 {
+func (rr *OPT) UDPSize() uint16 {
 	return rr.Hdr.Class
 }
 
 // SetUDPSize sets the UDP buffer size.
-func (rr *RR_OPT) SetUDPSize(size uint16) {
+func (rr *OPT) SetUDPSize(size uint16) {
 	rr.Hdr.Class = size
 }
 
 // Do returns the value of the DO (DNSSEC OK) bit.
-func (rr *RR_OPT) Do() bool {
+func (rr *OPT) Do() bool {
 	return byte(rr.Hdr.Ttl>>8)&_DO == _DO
 }
 
 // SetDo sets the DO (DNSSEC OK) bit.
-func (rr *RR_OPT) SetDo() {
+func (rr *OPT) SetDo() {
 	b1 := byte(rr.Hdr.Ttl >> 24)
 	b2 := byte(rr.Hdr.Ttl >> 16)
 	b3 := byte(rr.Hdr.Ttl >> 8)
@@ -126,7 +143,7 @@ func (rr *RR_OPT) SetDo() {
 	rr.Hdr.Ttl = uint32(b1)<<24 | uint32(b2)<<16 | uint32(b3)<<8 | uint32(b4)
 }
 
-// EDNS0 defines an EDNS0 Option. An OPT RR can have multiple option appended to
+// EDNS0 defines an EDNS0 Option. An OPT RR can have multiple options appended to
 // it. Basic use pattern for adding an option to and OPT RR:
 //
 //	// o is the OPT RR, e is the EDNS0 option
@@ -148,7 +165,7 @@ type EDNS0 interface {
 // The identifier is an opaque string encoded as hex.
 // Basic use pattern for creating an nsid option:
 //
-//	o := new(dns.RR_OPT)
+//	o := new(dns.OPT)
 //	o.Hdr.Name = "."
 //	o.Hdr.Rrtype = dns.TypeOPT
 //	e := new(dns.EDNS0_NSID)
@@ -184,7 +201,7 @@ func (e *EDNS0_NSID) String() string {
 // answer depending on the location or network topology.
 // Basic use pattern for creating an subnet option:
 //
-//	o := new(dns.RR_OPT)
+//	o := new(dns.OPT)
 //	o.Hdr.Name = "."
 //	o.Hdr.Rrtype = dns.TypeOPT
 //	e := new(dns.EDNS0_SUBNET)
@@ -215,7 +232,7 @@ func (e *EDNS0_SUBNET) pack() ([]byte, error) {
 	switch e.Family {
 	case 1:
 		if e.SourceNetmask > net.IPv4len*8 {
-			return nil, errors.New("bad netmask")
+			return nil, errors.New("dns: bad netmask")
 		}
 		ip := make([]byte, net.IPv4len)
 		a := e.Address.To4().Mask(net.CIDRMask(int(e.SourceNetmask), net.IPv4len*8))
@@ -225,10 +242,15 @@ func (e *EDNS0_SUBNET) pack() ([]byte, error) {
 			}
 			ip[i] = a[i]
 		}
+		needLength := e.SourceNetmask / 8
+		if e.SourceNetmask%8 > 0 {
+			needLength++
+		}
+		ip = ip[:needLength]
 		b = append(b, ip...)
 	case 2:
 		if e.SourceNetmask > net.IPv6len*8 {
-			return nil, errors.New("bad netmask")
+			return nil, errors.New("dns: bad netmask")
 		}
 		ip := make([]byte, net.IPv6len)
 		a := e.Address.Mask(net.CIDRMask(int(e.SourceNetmask), net.IPv6len*8))
@@ -238,15 +260,21 @@ func (e *EDNS0_SUBNET) pack() ([]byte, error) {
 			}
 			ip[i] = a[i]
 		}
+		needLength := e.SourceNetmask / 8
+		if e.SourceNetmask%8 > 0 {
+			needLength++
+		}
+		ip = ip[:needLength]
 		b = append(b, ip...)
 	default:
-		return nil, errors.New("bad address family")
+		return nil, errors.New("dns: bad address family")
 	}
 	return b, nil
 }
 
 func (e *EDNS0_SUBNET) unpack(b []byte) {
-	if len(b) < 8 {
+	lb := len(b)
+	if lb < 4 {
 		return
 	}
 	e.Family, _ = unpackUint16(b, 0)
@@ -254,15 +282,25 @@ func (e *EDNS0_SUBNET) unpack(b []byte) {
 	e.SourceScope = b[3]
 	switch e.Family {
 	case 1:
-		if len(b) == 8 {
-			e.Address = net.IPv4(b[4], b[5], b[6], b[7])
+		addr := make([]byte, 4)
+		for i := 0; i < int(e.SourceNetmask/8); i++ {
+			if 4+i > len(b) {
+				break
+			}
+			addr[i] = b[4+i]
 		}
+		e.Address = net.IPv4(addr[0], addr[1], addr[2], addr[3])
 	case 2:
-		if len(b) == 20 {
-			e.Address = net.IP{b[4], b[4+1], b[4+2], b[4+3], b[4+4],
-				b[4+5], b[4+6], b[4+7], b[4+8], b[4+9], b[4+10],
-				b[4+11], b[4+12], b[4+13], b[4+14], b[4+15]}
+		addr := make([]byte, 16)
+		for i := 0; i < int(e.SourceNetmask/8); i++ {
+			if 4+i > len(b) {
+				break
+			}
+			addr[i] = b[4+i]
 		}
+		e.Address = net.IP{addr[0], addr[1], addr[2], addr[3], addr[4],
+			addr[5], addr[6], addr[7], addr[8], addr[9], addr[10],
+			addr[11], addr[12], addr[13], addr[14], addr[15]}
 	}
 	return
 }
@@ -277,4 +315,180 @@ func (e *EDNS0_SUBNET) String() (s string) {
 	}
 	s += "/" + strconv.Itoa(int(e.SourceNetmask)) + "/" + strconv.Itoa(int(e.SourceScope))
 	return
+}
+
+// The UL (Update Lease) EDNS0 (draft RFC) option is used to tell the server to set
+// an expiration on an update RR. This is helpful for clients that cannot clean
+// up after themselves. This is a draft RFC and more information can be found at
+// http://files.dns-sd.org/draft-sekar-dns-ul.txt
+//
+//	o := new(dns.OPT)
+//	o.Hdr.Name = "."
+//	o.Hdr.Rrtype = dns.TypeOPT
+//	e := new(dns.EDNS0_UL)
+//	e.Code = dns.EDNS0UL
+//	e.Lease = 120 // in seconds
+//	o.Option = append(o.Option, e)
+type EDNS0_UL struct {
+	Code  uint16 // Always EDNS0UL
+	Lease uint32
+}
+
+func (e *EDNS0_UL) Option() uint16 {
+	return EDNS0UL
+}
+
+// Copied: http://golang.org/src/pkg/net/dnsmsg.go
+func (e *EDNS0_UL) pack() ([]byte, error) {
+	b := make([]byte, 4)
+	b[0] = byte(e.Lease >> 24)
+	b[1] = byte(e.Lease >> 16)
+	b[2] = byte(e.Lease >> 8)
+	b[3] = byte(e.Lease)
+	return b, nil
+}
+
+func (e *EDNS0_UL) unpack(b []byte) {
+	e.Lease = uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+
+func (e *EDNS0_UL) String() string {
+	return strconv.FormatUint(uint64(e.Lease), 10)
+}
+
+// Long Lived Queries: http://tools.ietf.org/html/draft-sekar-dns-llq-01
+// Implemented for completeness, as the EDNS0 type code is assigned.
+type EDNS0_LLQ struct {
+	Code      uint16 // Always EDNS0LLQ
+	Version   uint16
+	Opcode    uint16
+	Error     uint16
+	Id        uint64
+	LeaseLife uint32
+}
+
+func (e *EDNS0_LLQ) Option() uint16 {
+	return EDNS0LLQ
+}
+
+func (e *EDNS0_LLQ) pack() ([]byte, error) {
+	b := make([]byte, 18)
+	b[0], b[1] = packUint16(e.Version)
+	b[2], b[3] = packUint16(e.Opcode)
+	b[4], b[5] = packUint16(e.Error)
+	b[6] = byte(e.Id >> 56)
+	b[7] = byte(e.Id >> 48)
+	b[8] = byte(e.Id >> 40)
+	b[9] = byte(e.Id >> 32)
+	b[10] = byte(e.Id >> 24)
+	b[11] = byte(e.Id >> 16)
+	b[12] = byte(e.Id >> 8)
+	b[13] = byte(e.Id)
+	b[14] = byte(e.LeaseLife >> 24)
+	b[15] = byte(e.LeaseLife >> 16)
+	b[16] = byte(e.LeaseLife >> 8)
+	b[17] = byte(e.LeaseLife)
+	return nil, nil
+}
+
+func (e *EDNS0_LLQ) unpack(b []byte) {
+	e.Version, _ = unpackUint16(b, 0)
+	e.Opcode, _ = unpackUint16(b, 2)
+	e.Error, _ = unpackUint16(b, 4)
+	e.Id = uint64(b[6])<<56 | uint64(b[6+1])<<48 | uint64(b[6+2])<<40 |
+		uint64(b[6+3])<<32 | uint64(b[6+4])<<24 | uint64(b[6+5])<<16 | uint64(b[6+6])<<8 | uint64(b[6+7])
+	e.LeaseLife = uint32(b[14])<<24 | uint32(b[14+1])<<16 | uint32(b[14+2])<<8 | uint32(b[14+3])
+}
+
+func (e *EDNS0_LLQ) String() string {
+	s := strconv.FormatUint(uint64(e.Version), 10) + " " + strconv.FormatUint(uint64(e.Opcode), 10) +
+		" " + strconv.FormatUint(uint64(e.Error), 10) + " " + strconv.FormatUint(uint64(e.Id), 10) +
+		" " + strconv.FormatUint(uint64(e.LeaseLife), 10)
+	return s
+}
+
+type EDNS0_DAU struct {
+	Code    uint16 // Always EDNS0DAU
+	AlgCode []uint8
+}
+
+func (e *EDNS0_DAU) Option() uint16 {
+	return EDNS0DAU
+}
+func (e *EDNS0_DAU) pack() ([]byte, error) {
+	return e.AlgCode, nil
+}
+
+func (e *EDNS0_DAU) unpack(b []byte) {
+	e.AlgCode = b
+}
+
+func (e *EDNS0_DAU) String() string {
+	s := ""
+	for i := 0; i < len(e.AlgCode); i++ {
+		if a, ok := AlgorithmToString[e.AlgCode[i]]; ok {
+			s += " " + a
+		} else {
+			s += " " + strconv.Itoa(int(e.AlgCode[i]))
+		}
+	}
+	return s
+
+}
+
+type EDNS0_DHU struct {
+	Code    uint16 // Always EDNS0DHU
+	AlgCode []uint8
+}
+
+func (e *EDNS0_DHU) Option() uint16 {
+	return EDNS0DHU
+}
+func (e *EDNS0_DHU) pack() ([]byte, error) {
+	return e.AlgCode, nil
+}
+
+func (e *EDNS0_DHU) unpack(b []byte) {
+	e.AlgCode = b
+}
+
+func (e *EDNS0_DHU) String() string {
+	s := ""
+	for i := 0; i < len(e.AlgCode); i++ {
+		if a, ok := HashToString[e.AlgCode[i]]; ok {
+			s += " " + a
+		} else {
+			s += " " + strconv.Itoa(int(e.AlgCode[i]))
+		}
+	}
+	return s
+}
+
+type EDNS0_N3U struct {
+	Code    uint16 // Always EDNS0N3U
+	AlgCode []uint8
+}
+
+func (e *EDNS0_N3U) Option() uint16 {
+	return EDNS0N3U
+}
+func (e *EDNS0_N3U) pack() ([]byte, error) {
+	return e.AlgCode, nil
+}
+
+func (e *EDNS0_N3U) unpack(b []byte) {
+	e.AlgCode = b
+}
+
+func (e *EDNS0_N3U) String() string {
+	// Re-use the hash map
+	s := ""
+	for i := 0; i < len(e.AlgCode); i++ {
+		if a, ok := HashToString[e.AlgCode[i]]; ok {
+			s += " " + a
+		} else {
+			s += " " + strconv.Itoa(int(e.AlgCode[i]))
+		}
+	}
+	return s
 }

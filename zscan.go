@@ -1,26 +1,35 @@
+// Copyright 2011 Miek Gieben. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package dns
 
 import (
-	"fmt"
 	"io"
+	"log"
 	"os"
 	"strconv"
 	"strings"
 )
 
-// Only used when debugging the parser itself.
-var _DEBUG = false
+type debugging bool
 
-// Complete unsure about the correctness of this value?
-// Large blobs of base64 code might get longer than this....
-const maxTok = 2048
+const debug debugging = false
+
+func (d debugging) Printf(format string, args ...interface{}) {
+	if d {
+		log.Printf(format, args...)
+	}
+}
+
+const maxTok = 2048 // Largest token we can return.
 
 // Tokinize a RFC 1035 zone file. The tokenizer will normalize it:
 // * Add ownernames if they are left blank;
 // * Suppress sequences of spaces;
-// * Make each RR fit on one line (NEWLINE is send as last)
+// * Make each RR fit on one line (_NEWLINE is send as last)
 // * Handle comments: ;
-// * Handle braces.
+// * Handle braces - anywhere.
 const (
 	// Zonefile
 	_EOF = iota
@@ -44,7 +53,7 @@ const (
 	_EXPECT_OWNER_BL       // Whitespace after the ownername
 	_EXPECT_ANY            // Expect rrtype, ttl or class
 	_EXPECT_ANY_NOCLASS    // Expect rrtype or ttl
-	_EXPECT_ANY_NOCLASS_BL // The Whitespace after _EXPECT_ANY_NOCLASS
+	_EXPECT_ANY_NOCLASS_BL // The whitespace after _EXPECT_ANY_NOCLASS
 	_EXPECT_ANY_NOTTL      // Expect rrtype or class
 	_EXPECT_ANY_NOTTL_BL   // Whitespace after _EXPECT_ANY_NOTTL
 	_EXPECT_RRTYPE         // Expect rrtype
@@ -78,18 +87,20 @@ func (e *ParseError) Error() (s string) {
 }
 
 type lex struct {
-	token  string // Text of the token
-	err    bool   // When true, token text has lexer error 
-	value  uint8  // Value: _STRING, _BLANK, etc.
-	line   int    // Line in the file
-	column int    // Column in the file
-	torc   uint16 // Type or class as parsed in the lexer, we only need to look this up in the grammar
+	token   string // text of the token
+	err     bool   // when true, token text has lexer error
+	value   uint8  // value: _STRING, _BLANK, etc.
+	line    int    // line in the file
+	column  int    // column in the file
+	torc    uint16 // type or class as parsed in the lexer, we only need to look this up in the grammar
+	comment string // any comment text seen
 }
 
 // Tokens are returned when a zone file is parsed.
 type Token struct {
-	RR                // the scanned resource record when error is not nil
-	Error *ParseError // when an error occured, this has the error specifics
+	RR                  // the scanned resource record when error is not nil
+	Error   *ParseError // when an error occured, this has the error specifics
+	Comment string      // A potential comment positioned after the RR and on the same line
 }
 
 // NewRR reads the RR contained in the string s. Only the first RR is returned.
@@ -112,22 +123,29 @@ func ReadRR(q io.Reader, filename string) (RR, error) {
 	return r.RR, nil
 }
 
-// ParseZone reads a RFC 1035 style one from r. It returns Tokens on the 
-// returned channel, which consist out the parsed RR or an error. 
+// ParseZone reads a RFC 1035 style one from r. It returns Tokens on the
+// returned channel, which consist out the parsed RR, a potential comment or an error.
 // If there is an error the RR is nil. The string file is only used
 // in error reporting. The string origin is used as the initial origin, as
 // if the file would start with: $ORIGIN origin  .
 // The directives $INCLUDE, $ORIGIN, $TTL and $GENERATE are supported.
 // The channel t is closed by ParseZone when the end of r is reached.
 //
-// Basic usage pattern when reading from a string (z) containing the 
+// Basic usage pattern when reading from a string (z) containing the
 // zone data:
 //
 //	for x := range dns.ParseZone(strings.NewReader(z), "", "") {
 //		if x.Error != nil {
 //			// Do something with x.RR
 //		}
-//	}      
+//	}
+//
+// Comments specified after an RR (and on the same line!) are returned too:
+//
+//	foo. IN A 10.0.0.1 ; this is a comment
+//
+// The text "; this is comment" is returned in Token.Comment . Comments inside the
+// RR are discarded. Comments on a line by themselves are discarded too.
 func ParseZone(r io.Reader, origin, file string) chan Token {
 	return parseZoneHelper(r, origin, file, 10000)
 }
@@ -136,7 +154,6 @@ func parseZoneHelper(r io.Reader, origin, file string, chansize int) chan Token 
 	t := make(chan Token, chansize)
 	go parseZone(r, origin, file, t, 0)
 	return t
-
 }
 
 func parseZone(r io.Reader, origin, f string, t chan Token, include int) {
@@ -173,9 +190,6 @@ func parseZone(r io.Reader, origin, f string, t chan Token, include int) {
 	var defttl uint32 = defaultTtl
 	var prevName string
 	for l := range c {
-		if _DEBUG {
-			fmt.Printf("[%v]\n", l)
-		}
 		// Lexer spotted an error already
 		if l.err == true {
 			t <- Token{Error: &ParseError{f, l.token, l}}
@@ -233,7 +247,8 @@ func parseZone(r io.Reader, origin, f string, t chan Token, include int) {
 					return
 				} else {
 					h.Ttl = ttl
-					defttl = ttl
+					// Don't about the defttl, we should take the $TTL value
+					// defttl = ttl
 				}
 				st = _EXPECT_ANY_NOTTL_BL
 
@@ -252,8 +267,32 @@ func parseZone(r io.Reader, origin, f string, t chan Token, include int) {
 				t <- Token{Error: &ParseError{f, "expecting $INCLUDE value, not this...", l}}
 				return
 			}
-			if e := slurpRemainder(c, f); e != nil {
-				t <- Token{Error: e}
+			neworigin := origin // There may be optionally a new origin set after the filename, if not use current one
+			l := <-c
+			switch l.value {
+			case _BLANK:
+				l := <-c
+				if l.value == _STRING {
+					if _, _, ok := IsDomainName(l.token); !ok {
+						t <- Token{Error: &ParseError{f, "bad origin name", l}}
+						return
+					}
+					// a new origin is specified.
+					if !IsFqdn(l.token) {
+						if origin != "." { // Prevent .. endings
+							neworigin = l.token + "." + origin
+						} else {
+							neworigin = l.token + origin
+						}
+					} else {
+						neworigin = l.token
+					}
+				}
+			case _NEWLINE, _EOF:
+				// Ok
+			default:
+				t <- Token{Error: &ParseError{f, "garbage after $INCLUDE", l}}
+				return
 			}
 			// Start with the new file
 			r1, e1 := os.Open(l.token)
@@ -265,7 +304,7 @@ func parseZone(r io.Reader, origin, f string, t chan Token, include int) {
 				t <- Token{Error: &ParseError{f, "too deeply nested $INCLUDE", l}}
 				return
 			}
-			parseZone(r1, l.token, origin, t, include+1)
+			parseZone(r1, l.token, neworigin, t, include+1)
 			st = _EXPECT_OWNER_DIR
 		case _EXPECT_DIRTTL_BL:
 			if l.value != _BLANK {
@@ -278,7 +317,7 @@ func parseZone(r io.Reader, origin, f string, t chan Token, include int) {
 				t <- Token{Error: &ParseError{f, "expecting $TTL value, not this...", l}}
 				return
 			}
-			if e := slurpRemainder(c, f); e != nil {
+			if e, _ := slurpRemainder(c, f); e != nil {
 				t <- Token{Error: e}
 				return
 			}
@@ -300,8 +339,12 @@ func parseZone(r io.Reader, origin, f string, t chan Token, include int) {
 				t <- Token{Error: &ParseError{f, "expecting $ORIGIN value, not this...", l}}
 				return
 			}
-			if e := slurpRemainder(c, f); e != nil {
+			if e, _ := slurpRemainder(c, f); e != nil {
 				t <- Token{Error: e}
+			}
+			if _, _, ok := IsDomainName(l.token); !ok {
+				t <- Token{Error: &ParseError{f, "bad origin name", l}}
+				return
 			}
 			if !IsFqdn(l.token) {
 				if origin != "." { // Prevent .. endings
@@ -349,7 +392,7 @@ func parseZone(r io.Reader, origin, f string, t chan Token, include int) {
 					return
 				} else {
 					h.Ttl = ttl
-					defttl = ttl
+					// defttl = ttl // don't set the defttl here
 				}
 				st = _EXPECT_ANY_NOTTL_BL
 			default:
@@ -388,7 +431,7 @@ func parseZone(r io.Reader, origin, f string, t chan Token, include int) {
 					return
 				} else {
 					h.Ttl = ttl
-					defttl = ttl
+					// defttl = ttl // don't set the def ttl anymore
 				}
 				st = _EXPECT_RRTYPE_BL
 			case _RRTYPE:
@@ -412,7 +455,7 @@ func parseZone(r io.Reader, origin, f string, t chan Token, include int) {
 			h.Rrtype = l.torc
 			st = _EXPECT_RDATA
 		case _EXPECT_RDATA:
-			r, e := setRR(h, c, origin, f)
+			r, e, c1 := setRR(h, c, origin, f)
 			if e != nil {
 				// If e.lex is nil than we have encounter a unknown RR type
 				// in that case we substitute our current lex token
@@ -422,7 +465,7 @@ func parseZone(r io.Reader, origin, f string, t chan Token, include int) {
 				t <- Token{Error: e}
 				return
 			}
-			t <- Token{RR: r}
+			t <- Token{RR: r, Comment: c1}
 			st = _EXPECT_OWNER_DIR
 		}
 	}
@@ -435,6 +478,8 @@ func zlexer(s *scan, c chan lex) {
 	var l lex
 	str := make([]byte, maxTok) // Should be enough for any token
 	stri := 0                   // Offset in str (0 means empty)
+	com := make([]byte, maxTok) // Hold comment text
+	comi := 0
 	quote := false
 	escape := false
 	space := false
@@ -450,6 +495,14 @@ func zlexer(s *scan, c chan lex) {
 		if stri > maxTok {
 			l.token = "tok length insufficient for parsing"
 			l.err = true
+			debug.Printf("[%+v]", l.token)
+			c <- l
+			return
+		}
+		if comi > maxTok {
+			l.token = "com length insufficient for parsing"
+			l.err = true
+			debug.Printf("[%+v]", l.token)
 			c <- l
 			return
 		}
@@ -464,10 +517,12 @@ func zlexer(s *scan, c chan lex) {
 			}
 			escape = false
 			if commt {
+				com[comi] = x
+				comi++
 				break
 			}
 			if stri == 0 {
-				// Space directly as the beginnin, handled in the grammar
+				// Space directly in the beginning, handled in the grammar
 			} else if owner {
 				// If we have a string and its the first, make it an owner
 				l.value = _OWNER
@@ -483,13 +538,14 @@ func zlexer(s *scan, c chan lex) {
 				case "$GENERATE":
 					l.value = _DIRGENERATE
 				}
+				debug.Printf("[7 %+v]", l.token)
 				c <- l
 			} else {
 				l.value = _STRING
 				l.token = string(str[:stri])
 
 				if !rrtype {
-					if t, ok := Str_rr[strings.ToUpper(l.token)]; ok {
+					if t, ok := StringToType[l.token]; ok {
 						l.value = _RRTYPE
 						l.torc = t
 						rrtype = true
@@ -498,6 +554,7 @@ func zlexer(s *scan, c chan lex) {
 							if t, ok := typeToInt(l.token); !ok {
 								l.token = "unknown RR type"
 								l.err = true
+								// no lexer debug
 								c <- l
 								return
 							} else {
@@ -506,7 +563,7 @@ func zlexer(s *scan, c chan lex) {
 							}
 						}
 					}
-					if t, ok := Str_class[strings.ToUpper(l.token)]; ok {
+					if t, ok := StringToClass[l.token]; ok {
 						l.value = _CLASS
 						l.torc = t
 					} else {
@@ -514,6 +571,7 @@ func zlexer(s *scan, c chan lex) {
 							if t, ok := classToInt(l.token); !ok {
 								l.token = "unknown class"
 								l.err = true
+								// no lexer debug
 								c <- l
 								return
 							} else {
@@ -523,6 +581,7 @@ func zlexer(s *scan, c chan lex) {
 						}
 					}
 				}
+				debug.Printf("[6 %+v]", l.token)
 				c <- l
 			}
 			stri = 0
@@ -530,6 +589,7 @@ func zlexer(s *scan, c chan lex) {
 			if !space && !commt {
 				l.value = _BLANK
 				l.token = " "
+				debug.Printf("[5 %+v]", l.token)
 				c <- l
 			}
 			owner = false
@@ -550,10 +610,13 @@ func zlexer(s *scan, c chan lex) {
 			if stri > 0 {
 				l.value = _STRING
 				l.token = string(str[:stri])
+				debug.Printf("[4 %+v]", l.token)
 				c <- l
 				stri = 0
 			}
 			commt = true
+			com[comi] = ';'
+			comi++
 		case '\r':
 			// discard
 			// this means it can also not be used as rdata
@@ -577,8 +640,15 @@ func zlexer(s *scan, c chan lex) {
 					owner = true
 					l.value = _NEWLINE
 					l.token = "\n"
+					l.comment = string(com[:comi])
+					debug.Printf("[3 %+v %+v]", l.token, l.comment)
 					c <- l
+					l.comment = ""
+					comi = 0
+					break
 				}
+				com[comi] = ' ' // convert newline to space
+				comi++
 				break
 			}
 
@@ -588,24 +658,30 @@ func zlexer(s *scan, c chan lex) {
 					l.value = _STRING
 					l.token = string(str[:stri])
 					if !rrtype {
-						if _, ok := Str_rr[strings.ToUpper(l.token)]; ok {
+						if t, ok := StringToType[strings.ToUpper(l.token)]; ok {
 							l.value = _RRTYPE
+							l.torc = t
 							rrtype = true
 						}
 					}
+					debug.Printf("[2 %+v]", l.token)
 					c <- l
 				}
 				l.value = _NEWLINE
 				l.token = "\n"
+				debug.Printf("[1 %+v]", l.token)
 				c <- l
 				stri = 0
 				commt = false
 				rrtype = false
 				owner = true
+				comi = 0
 			}
 		case '\\':
 			// quote?
 			if commt {
+				com[comi] = x
+				comi++
 				break
 			}
 			if escape {
@@ -619,6 +695,8 @@ func zlexer(s *scan, c chan lex) {
 			escape = true
 		case '"':
 			if commt {
+				com[comi] = x
+				comi++
 				break
 			}
 			if escape {
@@ -632,6 +710,7 @@ func zlexer(s *scan, c chan lex) {
 			if stri != 0 {
 				l.value = _STRING
 				l.token = string(str[:stri])
+				debug.Printf("[%+v]", l.token)
 				c <- l
 				stri = 0
 			}
@@ -646,6 +725,8 @@ func zlexer(s *scan, c chan lex) {
 				break
 			}
 			if commt {
+				com[comi] = x
+				comi++
 				break
 			}
 			if escape {
@@ -660,6 +741,7 @@ func zlexer(s *scan, c chan lex) {
 				if brace < 0 {
 					l.token = "extra closing brace"
 					l.err = true
+					debug.Printf("[%+v]", l.token)
 					c <- l
 					return
 				}
@@ -668,6 +750,8 @@ func zlexer(s *scan, c chan lex) {
 			}
 		default:
 			if commt {
+				com[comi] = x
+				comi++
 				break
 			}
 			escape = false
@@ -682,6 +766,7 @@ func zlexer(s *scan, c chan lex) {
 		// Send remainder
 		l.token = string(str[:stri])
 		l.value = _STRING
+		debug.Printf("[%+v]", l.token)
 		c <- l
 	}
 }
@@ -695,7 +780,7 @@ func classToInt(token string) (uint16, bool) {
 	return uint16(class), true
 }
 
-// Extract the rr number from TYPExxx 
+// Extract the rr number from TYPExxx
 func typeToInt(token string) (uint16, bool) {
 	typ, ok := strconv.Atoi(token[4:])
 	if ok != nil {
@@ -735,7 +820,7 @@ func stringToTtl(token string) (uint32, bool) {
 	return s + i, true
 }
 
-// Parse LOC records' <digits>[.<digits>][mM] into a 
+// Parse LOC records' <digits>[.<digits>][mM] into a
 // mantissa exponent format. Token should contain the entire
 // string (i.e. no spaces allowed)
 func stringToCm(token string) (e, m uint8, ok bool) {
@@ -785,7 +870,7 @@ func appendOrigin(name, origin string) string {
 	return name + "." + origin
 }
 
-// LOC record helper function                                                                        
+// LOC record helper function
 func locCheckNorth(token string, latitude uint32) (uint32, bool) {
 	switch token {
 	case "n", "N":
@@ -796,7 +881,7 @@ func locCheckNorth(token string, latitude uint32) (uint32, bool) {
 	return latitude, false
 }
 
-// LOC record helper function                                                                        
+// LOC record helper function
 func locCheckEast(token string, longitude uint32) (uint32, bool) {
 	switch token {
 	case "e", "E":
@@ -807,22 +892,40 @@ func locCheckEast(token string, longitude uint32) (uint32, bool) {
 	return longitude, false
 }
 
-// "Eat" the rest of the "line"
-func slurpRemainder(c chan lex, f string) *ParseError {
+// "Eat" the rest of the "line". Return potential comments
+func slurpRemainder(c chan lex, f string) (*ParseError, string) {
 	l := <-c
+	com := ""
 	switch l.value {
 	case _BLANK:
 		l = <-c
+		com = l.comment
 		if l.value != _NEWLINE && l.value != _EOF {
-			return &ParseError{f, "garbage after rdata", l}
+			return &ParseError{f, "garbage after rdata", l}, ""
 		}
-		// Ok
 	case _NEWLINE:
-		// Ok
+		com = l.comment
 	case _EOF:
-		// Ok
 	default:
-		return &ParseError{f, "garbage after rdata", l}
+		return &ParseError{f, "garbage after rdata", l}, ""
 	}
-	return nil
+	return nil, com
+}
+
+// Parse a 64 bit-like ipv6 address: "0014:4fff:ff20:ee64"
+// Used for NID and L64 record.
+func stringToNodeID(l lex) (uint64, *ParseError) {
+	if len(l.token) < 19 {
+		return 0, &ParseError{l.token, "bad NID/L64 NodeID/Locator64", l}
+	}
+	// There must be three colons at fixes postitions, if not its a parse error
+	if l.token[4] != ':' && l.token[9] != ':' && l.token[14] != ':' {
+		return 0, &ParseError{l.token, "bad NID/L64 NodeID/Locator64", l}
+	}
+	s := l.token[0:4] + l.token[5:9] + l.token[10:14] + l.token[15:19]
+	u, e := strconv.ParseUint(s, 16, 64)
+	if e != nil {
+		return 0, &ParseError{l.token, "bad NID/L64 NodeID/Locator64", l}
+	}
+	return u, nil
 }

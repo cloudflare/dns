@@ -16,19 +16,28 @@ If you like this, you may also be interested in:
 # Goals
 
 * KISS;
+* Fast
 * Small API, if its easy to code in Go, don't make a function for it.
+
+# Users
+
+A not-so-up-to-date-list-that-may-be-actually-current:
+
+* https://github.com/abh/geodns
+* http://www.statdns.com/
+* http://www.dnsinspect.com/
+* https://github.com/chuangbo/jianbing-dictionary-dns/tree/master/golang
+* more?
 
 # Features
 
 * UDP/TCP queries, IPv4 and IPv6;
-* RFC 1035 zone file parsing ($INCLUDE, $ORIGIN, $TTL and $GENERATE [for all record types]
-  are supported);
-* Fast: 
-    * Reply speed around 45/50K qps (faster hardware results in more qps);
-    * Parsing RRs with 95/100K RR/s, that's 5M records in about 50 seconds;
+* RFC 1035 zone file parsing ($INCLUDE, $ORIGIN, $TTL and $GENERATE (for all record types) are supported;
+* Fast:
+    * Reply speed around ~ 80K qps (faster hardware results in more qps);
+    * Parsing RRs with  ~ 100K RR/s, that's 5M records in about 50 seconds;
 * Server side programming (mimicking the net/http package);
-* Client side programming with asynchronous calls;
-* Asynchronous queries/replies for client and server;
+* Client side programming;
 * DNSSEC: signing, validating and key generation for DSA, RSA and ECDSA;
 * EDNS0, NSID;
 * AXFR/IXFR;
@@ -42,14 +51,16 @@ Miek Gieben  -  2010-2012  -  miek@miek.nl
 # Building
 
 Building is done with the `go` tool. If you have setup your GOPATH
-correctly the following should work:
+correctly, the following should work:
 
     go get github.com/miekg/dns
     go build dns
 
-Sample programs can be found in the `ex` directory. They can 
-be build with: `make -C ex`, or also with the `go` tool.
-
+A short "how to use the API" is at the beginning of dns.go (this also will show
+when you call `go doc github.com/miekg/dns`. Sample
+programs can be found in the `ex` directory. They can also be build
+with: `go build`.
+ 
 ## Supported RFCs
 
 *all of them*
@@ -67,6 +78,7 @@ be build with: `make -C ex`, or also with the `go` tool.
 * 2782 - SRV record
 * 2845 - TSIG record
 * 2915 - NAPTR record
+* 2929 - DNS IANA Considerations
 * 3110 - RSASHA1 DNS keys
 * 3225 - DO bit (DNSSEC OK)
 * 340{1,2,3} - NAPTR record
@@ -86,7 +98,12 @@ be build with: `make -C ex`, or also with the `go` tool.
 * 5702 - SHA2 in the DNS
 * 5936 - AXFR
 * 6605 - ECDSA
+* 6742 - ILNP DNS
+* 6891 - EDNS0 update
 * xxxx - URI record (draft)
+* xxxx - EDNS0 DNS Update Lease (draft)
+* xxxx - IEU48/IEU64 records (draft)
+* xxxx - Algorithm-Signal (draft)
 
 ## Loosely based upon
 

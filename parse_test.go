@@ -1,3 +1,7 @@
+// Copyright 2011 Miek Gieben. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package dns
 
 import (
@@ -29,7 +33,7 @@ Publish: 20110302104537
 Activate: 20110302104537`
 
 	xk, _ := NewRR(pub)
-	k := xk.(*RR_DNSKEY)
+	k := xk.(*DNSKEY)
 	p, err := k.NewPrivateKey(priv)
 	if err != nil {
 		t.Logf("%v\n", err)
@@ -51,7 +55,7 @@ Activate: 20110302104537`
 		t.Fail()
 	}
 
-	soa := new(RR_SOA)
+	soa := new(SOA)
 	soa.Hdr = RR_Header{"miek.nl.", TypeSOA, ClassINET, 14400, 0}
 	soa.Ns = "open.nlnetlabs.nl."
 	soa.Mbox = "miekg.atoom.net."
@@ -61,7 +65,7 @@ Activate: 20110302104537`
 	soa.Expire = 604800
 	soa.Minttl = 86400
 
-	sig := new(RR_RRSIG)
+	sig := new(RRSIG)
 	sig.Hdr = RR_Header{"miek.nl.", TypeRRSIG, ClassINET, 14400, 0}
 	sig.Expiration = 1296534305 // date -u '+%s' -d"2011-02-01 04:25:05"
 	sig.Inception = 1293942305  // date -u '+%s' -d"2011-01-02 04:25:05"
@@ -90,11 +94,11 @@ PrivateKey: WURgWHCcYIYUPWgeLmiPY2DJJk02vgrmTfitxgqcL4vwW7BOrbawVmVe0d9V94SR`
 	if err != nil {
 		t.Fatal(err.Error())
 	}
-	privkey, err := eckey.(*RR_DNSKEY).NewPrivateKey(priv)
+	privkey, err := eckey.(*DNSKEY).NewPrivateKey(priv)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
-	ds := eckey.(*RR_DNSKEY).ToDS(SHA384)
+	ds := eckey.(*DNSKEY).ToDS(SHA384)
 	if ds.KeyTag != 10771 {
 		t.Fatal("Wrong keytag on DS")
 	}
@@ -102,18 +106,18 @@ PrivateKey: WURgWHCcYIYUPWgeLmiPY2DJJk02vgrmTfitxgqcL4vwW7BOrbawVmVe0d9V94SR`
 		t.Fatal("Wrong DS Digest")
 	}
 	a, _ := NewRR("www.example.net. 3600 IN A 192.0.2.1")
-	sig := new(RR_RRSIG)
+	sig := new(RRSIG)
 	sig.Hdr = RR_Header{"example.net.", TypeRRSIG, ClassINET, 14400, 0}
 	sig.Expiration, _ = StringToTime("20100909102025")
 	sig.Inception, _ = StringToTime("20100812102025")
-	sig.KeyTag = eckey.(*RR_DNSKEY).KeyTag()
-	sig.SignerName = eckey.(*RR_DNSKEY).Hdr.Name
-	sig.Algorithm = eckey.(*RR_DNSKEY).Algorithm
+	sig.KeyTag = eckey.(*DNSKEY).KeyTag()
+	sig.SignerName = eckey.(*DNSKEY).Hdr.Name
+	sig.Algorithm = eckey.(*DNSKEY).Algorithm
 
 	sig.Sign(privkey, []RR{a})
 
 	t.Logf("%s", sig.String())
-	if e := sig.Verify(eckey.(*RR_DNSKEY), []RR{a}); e != nil {
+	if e := sig.Verify(eckey.(*DNSKEY), []RR{a}); e != nil {
 		t.Logf("Failure to validate: %s", e.Error())
 		t.Fail()
 	}
@@ -137,40 +141,6 @@ func TestDotInName(t *testing.T) {
 	if dom != "aa\\.bb.nl." {
 		t.Log("Dot should have been escaped: " + dom)
 		t.Fail()
-	}
-}
-
-func TestParseZone(t *testing.T) {
-	zone := `z1.miek.nl. 86400 IN RRSIG NSEC 8 3 86400 20110823011301 20110724011301 12051 miek.nl. lyRljEQFOmajcdo6bBI67DsTlQTGU3ag9vlE07u7ynqt9aYBXyE9mkasAK4V0oI32YGb2pOSB6RbbdHwUmSt+cYhOA49tl2t0Qoi3pH21dicJiupdZuyjfqUEqJlQoEhNXGtP/pRvWjNA4pQeOsOAoWq/BDcWCSQB9mh2LvUOH4= ; {keyid = sksak}
-z2.miek.nl.  86400   IN      NSEC    miek.nl. TXT RRSIG NSEC
-$TTL 100
-z3.miek.nl.  IN      NSEC    miek.nl. TXT RRSIG NSEC`
-	to := ParseZone(strings.NewReader(zone), "", "")
-	i := 0
-	for x := range to {
-		if x.Error == nil {
-			switch i {
-			case 0:
-				if x.RR.Header().Name != "z1.miek.nl." {
-					t.Log("Failed to parse z1")
-					t.Fail()
-				}
-			case 1:
-				if x.RR.Header().Name != "z2.miek.nl." {
-					t.Log("Failed to parse z2")
-					t.Fail()
-				}
-			case 2:
-				if x.RR.String() != "z3.miek.nl.\t100\tIN\tNSEC\tmiek.nl. TXT RRSIG NSEC" {
-					t.Logf("Failed to parse z3 %s", x.RR.String())
-					t.Fail()
-				}
-			}
-		} else {
-			t.Logf("Failed to parse: %v\n", x.Error)
-			t.Fail()
-		}
-		i++
 	}
 }
 
@@ -274,6 +244,26 @@ func TestParseLOC(t *testing.T) {
 	}
 }
 
+func TestParseDS(t *testing.T) {
+	dt := map[string]string{
+		"example.net. 3600 IN DS 40692 12 3 22261A8B0E0D799183E35E24E2AD6BB58533CBA7E3B14D659E9CA09B 2071398F": "example.net.\t3600\tIN\tDS\t40692 12 3 22261A8B0E0D799183E35E24E2AD6BB58533CBA7E3B14D659E9CA09B2071398F",
+	}
+	for i, o := range dt {
+		rr, e := NewRR(i)
+		if e != nil {
+			t.Log("Failed to parse RR: " + e.Error())
+			t.Fail()
+			continue
+		}
+		if rr.String() != o {
+			t.Logf("`%s' should be equal to\n`%s', but is     `%s'\n", i, o, rr.String())
+			t.Fail()
+		} else {
+			t.Logf("RR is OK: `%s'", rr.String())
+		}
+	}
+}
+
 func TestQuotes(t *testing.T) {
 	tests := map[string]string{
 		`t.example.com. IN TXT "a bc"`: "t.example.com.\t3600\tIN\tTXT\t\"a bc\"",
@@ -311,12 +301,12 @@ func TestQuotes(t *testing.T) {
 
 func TestParseBrace(t *testing.T) {
 	tests := map[string]string{
-		"(miek.nl.) 3600 IN A 127.0.0.1":                 "miek.nl.\t3600\tIN\tA\t127.0.0.1",
+		"(miek.nl.) 3600 IN A 127.0.1.1":                 "miek.nl.\t3600\tIN\tA\t127.0.1.1",
 		"miek.nl. (3600) IN MX (10) elektron.atoom.net.": "miek.nl.\t3600\tIN\tMX\t10 elektron.atoom.net.",
 		`miek.nl. IN (
                         3600 A 127.0.0.1)`: "miek.nl.\t3600\tIN\tA\t127.0.0.1",
-		"(miek.nl.) (A) (127.0.0.1)":                          "miek.nl.\t3600\tIN\tA\t127.0.0.1",
-		"miek.nl A 127.0.0.1":                                 "miek.nl.\t3600\tIN\tA\t127.0.0.1",
+		"(miek.nl.) (A) (127.0.2.1)":                          "miek.nl.\t3600\tIN\tA\t127.0.2.1",
+		"miek.nl A 127.0.3.1":                                 "miek.nl.\t3600\tIN\tA\t127.0.3.1",
 		"_ssh._tcp.local. 60 IN (PTR) stora._ssh._tcp.local.": "_ssh._tcp.local.\t60\tIN\tPTR\tstora._ssh._tcp.local.",
 		"miek.nl. NS ns.miek.nl":                              "miek.nl.\t3600\tIN\tNS\tns.miek.nl.",
 		`(miek.nl.) (
@@ -327,6 +317,7 @@ func TestParseBrace(t *testing.T) {
                         (IN) 
                         (AAAA)
                         (::1))`: "miek.nl.\t3600\tIN\tAAAA\t::1",
+		"miek.nl. IN AAAA ::2": "miek.nl.\t3600\tIN\tAAAA\t::2",
 		`((m)(i)ek.(n)l.) (SOA) (soa.) (soa.) (
                                 2009032802 ; serial
                                 21600      ; refresh (6 hours)
@@ -334,9 +325,9 @@ func TestParseBrace(t *testing.T) {
                                 604()800     ; expire (1 week)
                                 3600       ; minimum (1 hour)
                         )`: "miek.nl.\t3600\tIN\tSOA\tsoa. soa. 2009032802 21600 7200 604800 3600",
-		"miek\\.nl. IN A 127.0.0.1": "miek\\.nl.\t3600\tIN\tA\t127.0.0.1",
-		"miek.nl. IN A 127.0.0.1":   "miek.nl.\t3600\tIN\tA\t127.0.0.1",
-		"miek.nl. A 127.0.0.1":      "miek.nl.\t3600\tIN\tA\t127.0.0.1",
+		"miek\\.nl. IN A 127.0.0.10": "miek\\.nl.\t3600\tIN\tA\t127.0.0.10",
+		"miek.nl. IN A 127.0.0.11":   "miek.nl.\t3600\tIN\tA\t127.0.0.11",
+		"miek.nl. A 127.0.0.12":      "miek.nl.\t3600\tIN\tA\t127.0.0.12",
 		`miek.nl.       86400 IN SOA elektron.atoom.net. miekg.atoom.net. (
                                 2009032802 ; serial
                                 21600      ; refresh (6 hours)
@@ -348,7 +339,7 @@ func TestParseBrace(t *testing.T) {
 	for i, o := range tests {
 		rr, e := NewRR(i)
 		if e != nil {
-			t.Log("Failed to parse RR: " + e.Error())
+			t.Log("Failed to parse RR: " + e.Error() + "\n\t" + i)
 			t.Fail()
 			continue
 		}
@@ -413,27 +404,6 @@ func TestZoneParsing(t *testing.T) {
 	t.Logf("%d RRs parsed in %.2f s (%.2f RR/s)", i, float32(delta)/1e9, float32(i)/(float32(delta)/1e9))
 }
 
-// name.	3600	IN	SOA	a6.nstld.com. hostmaster.nic.name. 203362132 300 300 1209600 300
-// name.	10800	IN	NS	name.
-// name.	10800	IN	NS	g6.nstld.com.
-// name.	7200	IN	NS	h6.nstld.com.
-// name.	3600	IN	NS	j6.nstld.com.
-// name.	3600	IN	NS	k6.nstld.com.
-// name.	10800	IN	NS	l6.nstld.com.
-// name.	10800	IN	NS	a6.nstld.com.
-// name.	10800	IN	NS	c6.nstld.com.
-// name.	10800	IN	NS	d6.nstld.com.
-// name.	10800	IN	NS	f6.nstld.com.
-// name.	10800	IN	NS	m6.nstld.com.
-// 0-0onlus.name.	10800	IN	NS	ns7.ehiweb.it.
-// 0-0onlus.name.	10800	IN	NS	ns8.ehiweb.it.
-// 0-g.name.	10800	IN	MX	10 mx01.nic.name.
-// 0-g.name.	10800	IN	MX	10 mx02.nic.name.
-// 0-g.name.	10800	IN	MX	10 mx03.nic.name.
-// 0-g.name.	10800	IN	MX	10 mx04.nic.name.
-// 0-g.name.    10800   IN      TXT     "10 mx\"04.nic"
-// moutamassey.0-g.name.name.	10800	IN	NS	ns01.yahoodomains.jp.
-// moutamassey.0-g.name.name.	10800	IN	NS	ns02.yahoodomains.jp.
 func ExampleZone() {
 	zone := `$ORIGIN .
 $TTL 3600       ; 1 hour
@@ -445,7 +415,7 @@ name                    IN SOA  a6.nstld.com. hostmaster.nic.name. (
                                 300        ; minimum (5 minutes)
                                 )
 $TTL 10800      ; 3 hours
-@	10800	IN	NS	@
+name.	10800	IN	NS	name.
                IN       NS      g6.nstld.com.
                7200     NS      h6.nstld.com.
              3600 IN    NS      j6.nstld.com.
@@ -456,6 +426,9 @@ $TTL 10800      ; 3 hours
                         NS      d6.nstld.com.
                         NS      f6.nstld.com.
                         NS      m6.nstld.com.
+( 
+			NS	m7.nstld.com.
+)
 $ORIGIN name.
 0-0onlus                NS      ns7.ehiweb.it.
                         NS      ns8.ehiweb.it.
@@ -463,7 +436,6 @@ $ORIGIN name.
                         MX      10 mx02.nic
                         MX      10 mx03.nic
                         MX      10 mx04.nic
-                        TXT     "10 mx\"04.nic"
 $ORIGIN 0-g.name
 moutamassey             NS      ns01.yahoodomains.jp.
                         NS      ns02.yahoodomains.jp.
@@ -472,9 +444,30 @@ moutamassey             NS      ns01.yahoodomains.jp.
 	for x := range to {
 		fmt.Printf("%s\n", x.RR)
 	}
+	// Output:
+	// name.	3600	IN	SOA	a6.nstld.com. hostmaster.nic.name. 203362132 300 300 1209600 300
+	// name.	10800	IN	NS	name.
+	// name.	10800	IN	NS	g6.nstld.com.
+	// name.	7200	IN	NS	h6.nstld.com.
+	// name.	3600	IN	NS	j6.nstld.com.
+	// name.	3600	IN	NS	k6.nstld.com.
+	// name.	10800	IN	NS	l6.nstld.com.
+	// name.	10800	IN	NS	a6.nstld.com.
+	// name.	10800	IN	NS	c6.nstld.com.
+	// name.	10800	IN	NS	d6.nstld.com.
+	// name.	10800	IN	NS	f6.nstld.com.
+	// name.	10800	IN	NS	m6.nstld.com.
+	// name.	10800	IN	NS	m7.nstld.com.
+	// 0-0onlus.name.	10800	IN	NS	ns7.ehiweb.it.
+	// 0-0onlus.name.	10800	IN	NS	ns8.ehiweb.it.
+	// 0-g.name.	10800	IN	MX	10 mx01.nic.name.
+	// 0-g.name.	10800	IN	MX	10 mx02.nic.name.
+	// 0-g.name.	10800	IN	MX	10 mx03.nic.name.
+	// 0-g.name.	10800	IN	MX	10 mx04.nic.name.
+	// moutamassey.0-g.name.name.	10800	IN	NS	ns01.yahoodomains.jp.
+	// moutamassey.0-g.name.name.	10800	IN	NS	ns02.yahoodomains.jp.
 }
 
-// www.example.com.	3600	IN	HIP	 2 200100107B1A74DF365639CC39F1D578 AwEAAbdxyhNuSutc5EMzxTs9LBPCIkOFH8cIvM4p9+LrV4e19WzK00+CI6zBCQTdtWsuxKbWIy87UOoJTwkUs7lBu+Upr1gsNrut79ryra+bSRGQb1slImA8YVJyuIDsj7kwzG7jnERNqnWxZ48AWkskmdHaVDP4BcelrTI3rMXdXF5D rvs.example.com.
 func ExampleHIP() {
 	h := `www.example.com      IN  HIP ( 2 200100107B1A74DF365639CC39F1D578
                 AwEAAbdxyhNuSutc5EMzxTs9LBPCIkOFH8cIvM4p
@@ -484,14 +477,17 @@ b1slImA8YVJyuIDsj7kwzG7jnERNqnWxZ48AWkskmdHaVDP4BcelrTI3rMXdXF5D
 	if hip, err := NewRR(h); err == nil {
 		fmt.Printf("%s\n", hip.String())
 	}
+	// Output:
+	// www.example.com.	3600	IN	HIP	 2 200100107B1A74DF365639CC39F1D578 AwEAAbdxyhNuSutc5EMzxTs9LBPCIkOFH8cIvM4p9+LrV4e19WzK00+CI6zBCQTdtWsuxKbWIy87UOoJTwkUs7lBu+Upr1gsNrut79ryra+bSRGQb1slImA8YVJyuIDsj7kwzG7jnERNqnWxZ48AWkskmdHaVDP4BcelrTI3rMXdXF5D rvs.example.com.
 }
 
-// example.com.	1000	IN	SOA	master.example.com. admin.example.com. 1 4294967294 4294967293 4294967295 100
 func ExampleSOA() {
 	s := "example.com. 1000 SOA master.example.com. admin.example.com. 1 4294967294 4294967293 4294967295 100"
 	if soa, err := NewRR(s); err == nil {
 		fmt.Printf("%s\n", soa.String())
 	}
+	// Output:
+	// example.com.	1000	IN	SOA	master.example.com. admin.example.com. 1 4294967294 4294967293 4294967295 100
 }
 
 func TestLineNumberError(t *testing.T) {
@@ -506,12 +502,27 @@ func TestLineNumberError(t *testing.T) {
 
 // Test with no known RR on the line
 func TestLineNumberError2(t *testing.T) {
-	s := "example.com. 1000 SO master.example.com. admin.example.com. 1 4294967294 4294967293 4294967295 100"
-	_, err := NewRR(s)
-	if err == nil {
-		t.Fail()
-	} else {
-		//		fmt.Printf("%s\n", err.Error())
+	tests := map[string]string{
+		"example.com. 1000 SO master.example.com. admin.example.com. 1 4294967294 4294967293 4294967295 100": "dns: expecting RR type or class, not this...: \"SO\" at line: 1:21",
+		"example.com 1000 IN TALINK a.example.com. b..example.com.":                                          "dns: bad TALINK NextName: \"b..example.com.\" at line: 1:57",
+		"example.com 1000 IN TALINK ( a.example.com. b..example.com. )":                                      "dns: bad TALINK NextName: \"b..example.com.\" at line: 1:60",
+		`example.com 1000 IN TALINK ( a.example.com. 
+	bb..example.com. )`: "dns: bad TALINK NextName: \"bb..example.com.\" at line: 2:18",
+		// This is a bug, it should report an error on line 1, but the new is already processed.
+		`example.com 1000 IN TALINK ( a.example.com.  b...example.com.
+	)`: "dns: bad TALINK NextName: \"b...example.com.\" at line: 2:1"}
+
+	for in, err := range tests {
+		_, e := NewRR(in)
+		if e == nil {
+			t.Fail()
+		} else {
+			if e.Error() != err {
+				t.Logf("%s\n", in)
+				t.Logf("Error should be %s is %s\n", err, e.Error())
+				t.Fail()
+			}
+		}
 	}
 }
 
@@ -566,16 +577,6 @@ func TestEmpty(t *testing.T) {
 	}
 }
 
-// 0.0.0.192.IN-ADDR.ARPA.	3600	IN	NS	SERVER1.EXAMPLE.
-// 0.0.0.192.IN-ADDR.ARPA.	3600	IN	NS	SERVER2.EXAMPLE.
-// 1.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	1.0.0.0.192.IN-ADDR.ARPA.
-// 2.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	2.0.0.0.192.IN-ADDR.ARPA.
-// 3.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	3.0.0.0.192.IN-ADDR.ARPA.
-// 4.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	4.0.0.0.192.IN-ADDR.ARPA.
-// 5.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	5.0.0.0.192.IN-ADDR.ARPA.
-// 6.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	6.0.0.0.192.IN-ADDR.ARPA.
-// 7.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	7.0.0.0.192.IN-ADDR.ARPA.
-// 8.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	8.0.0.0.192.IN-ADDR.ARPA.
 func ExampleGenerate() {
 	// From the manual: http://www.bind9.net/manual/bind/9.3.2/Bv9ARM.ch06.html#id2566761
 	zone := "$GENERATE 1-2 0 NS SERVER$.EXAMPLE.\n$GENERATE 1-8 $ CNAME $.0"
@@ -585,6 +586,17 @@ func ExampleGenerate() {
 			fmt.Printf("%s\n", x.RR.String())
 		}
 	}
+	// Output:
+	// 0.0.0.192.IN-ADDR.ARPA.	3600	IN	NS	SERVER1.EXAMPLE.
+	// 0.0.0.192.IN-ADDR.ARPA.	3600	IN	NS	SERVER2.EXAMPLE.
+	// 1.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	1.0.0.0.192.IN-ADDR.ARPA.
+	// 2.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	2.0.0.0.192.IN-ADDR.ARPA.
+	// 3.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	3.0.0.0.192.IN-ADDR.ARPA.
+	// 4.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	4.0.0.0.192.IN-ADDR.ARPA.
+	// 5.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	5.0.0.0.192.IN-ADDR.ARPA.
+	// 6.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	6.0.0.0.192.IN-ADDR.ARPA.
+	// 7.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	7.0.0.0.192.IN-ADDR.ARPA.
+	// 8.0.0.192.IN-ADDR.ARPA.	3600	IN	CNAME	8.0.0.0.192.IN-ADDR.ARPA.
 }
 
 func TestSRVPacking(t *testing.T) {
@@ -606,7 +618,7 @@ func TestSRVPacking(t *testing.T) {
 			port = tmp
 		}
 
-		rr := &RR_SRV{
+		rr := &SRV{
 			Hdr: RR_Header{Name: "somename.",
 				Rrtype: TypeSRV,
 				Class:  ClassINET,
@@ -623,5 +635,113 @@ func TestSRVPacking(t *testing.T) {
 	_, err := msg.Pack(nil)
 	if err != nil {
 		t.Fatalf("Couldn't pack %v\n", msg)
+	}
+}
+
+func TestParseBackslash(t *testing.T) {
+	r, e := NewRR("nul\\000gap.test.globnix.net. 600 IN	A	192.0.2.10")
+	if e != nil {
+		t.Fatalf("Could not create RR with \\000 in it")
+	} else {
+		t.Logf("Parsed %s\n", r.String())
+	}
+}
+
+func TestILNP(t *testing.T) {
+	tests := []string{
+		"host1.example.com.\t3600\tIN\tNID\t10 0014:4fff:ff20:ee64",
+		"host1.example.com.\t3600\tIN\tNID\t20 0015:5fff:ff21:ee65",
+		"host2.example.com.\t3600\tIN\tNID\t10 0016:6fff:ff22:ee66",
+		"host1.example.com.\t3600\tIN\tL32\t10 10.1.2.0",
+		"host1.example.com.\t3600\tIN\tL32\t20 10.1.4.0",
+		"host2.example.com.\t3600\tIN\tL32\t10 10.1.8.0",
+		"host1.example.com.\t3600\tIN\tL64\t10 2001:0DB8:1140:1000",
+		"host1.example.com.\t3600\tIN\tL64\t20 2001:0DB8:2140:2000",
+		"host2.example.com.\t3600\tIN\tL64\t10 2001:0DB8:4140:4000",
+		"host1.example.com.\t3600\tIN\tLP\t10 l64-subnet1.example.com.",
+		"host1.example.com.\t3600\tIN\tLP\t10 l64-subnet2.example.com.",
+		"host1.example.com.\t3600\tIN\tLP\t20 l32-subnet1.example.com.",
+	}
+	for _, t1 := range tests {
+		r, e := NewRR(t1)
+		if e != nil {
+			t.Fatalf("An error occured: %s\n", e.Error())
+		} else {
+			if t1 != r.String() {
+				t.Fatalf("Strings should be equal %s %s", t1, r.String())
+			}
+		}
+	}
+}
+
+func TestComment(t *testing.T) {
+	// Comments we must see
+	comments := map[string]bool{"; this is comment 1": true,
+		"; this is comment 4": true, "; this is comment 6": true,
+		"; this is comment 7": true, "; this is comment 8": true}
+	zone := `
+foo. IN A 10.0.0.1 ; this is comment 1
+foo. IN A (
+	10.0.0.2 ; this is comment2
+)
+; this is comment3
+foo. IN A 10.0.0.3
+foo. IN A ( 10.0.0.4 ); this is comment 4
+
+foo. IN A 10.0.0.5
+; this is comment5
+
+foo. IN A 10.0.0.6
+
+foo. IN DNSKEY 256 3 5 AwEAAb+8l ; this is comment 6
+foo. IN NSEC miek.nl. TXT RRSIG NSEC; this is comment 7
+foo. IN TXT "THIS IS TEXT MAN"; this is comment 8
+`
+	for x := range ParseZone(strings.NewReader(zone), ".", "") {
+		if x.Error == nil {
+			if x.Comment != "" {
+				if _, ok := comments[x.Comment]; !ok {
+					t.Logf("wrong comment %s", x.Comment)
+					t.Fail()
+				}
+			}
+		}
+	}
+}
+
+func TestEUIxx(t *testing.T) {
+	tests := map[string]string{
+		"host.example. IN EUI48 00-00-5e-90-01-2a":       "host.example.\t3600\tIN\tEUI48\t00-00-5e-90-01-2a",
+		"host.example. IN EUI64 00-00-5e-ef-00-00-00-2a": "host.example.\t3600\tIN\tEUI64\t00-00-5e-ef-00-00-00-2a",
+	}
+	for i, o := range tests {
+		r, e := NewRR(i)
+		if e != nil {
+			t.Logf("Failed to parse %s: %s\n", i, e.Error())
+			t.Fail()
+		}
+		if r.String() != o {
+			t.Logf("Want %s, got %s\n", o, r.String())
+			t.Fail()
+		}
+	}
+}
+
+func TestUserRR(t *testing.T) {
+	tests := map[string]string{
+		"host.example. IN UID 1234":       "host.example.\t3600\tIN\tUID\t1234",
+		"host.example. IN GID 1234556": "host.example.\t3600\tIN\tGID\t1234556",
+		"host.example. IN UINFO \"Miek Gieben\"": "host.example.\t3600\tIN\tUINFO\t\"Miek Gieben\"",
+	}
+	for i, o := range tests {
+		r, e := NewRR(i)
+		if e != nil {
+			t.Logf("Failed to parse %s: %s\n", i, e.Error())
+			t.Fail()
+		}
+		if r.String() != o {
+			t.Logf("Want %s, got %s\n", o, r.String())
+			t.Fail()
+		}
 	}
 }
