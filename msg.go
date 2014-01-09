@@ -1289,7 +1289,7 @@ func (h *MsgHdr) String() string {
 
 // Pack packs a Msg: it is converted to to wire format.
 // If the dns.Compress is true the message will be in compressed wire format.
-func (dns *Msg) Pack() (msg []byte, err error) {
+func (dns *Msg) Pack(inmsg []byte) (msg []byte, err error) {
 	var dh Header
 	var compression map[string]int
 	if dns.Compress {
@@ -1335,7 +1335,12 @@ func (dns *Msg) Pack() (msg []byte, err error) {
 	dh.Nscount = uint16(len(ns))
 	dh.Arcount = uint16(len(extra))
 
-	msg = make([]byte, dns.packLen()+1)
+
+	msg = inmsg
+	if len(inmsg) <= dns.packLen() {
+		msg = make([]byte, dns.packLen()+1)
+	}
+
 	// Pack it in: header and then the pieces.
 	off := 0
 	off, err = packStructCompress(&dh, msg, off, compression, dns.Compress)
@@ -1423,6 +1428,7 @@ func (dns *Msg) Unpack(msg []byte) (err error) {
 		// TODO(miek) make this an error?
 		// use PackOpt to let people tell how detailed the error reporting should be?
 		// println("dns: extra bytes in dns packet", off, "<", len(msg))
+		return fmt.Errorf("extra bytes in dns packet %d !=  %d", off, len(msg))
 	}
 	return nil
 }

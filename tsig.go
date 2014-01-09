@@ -170,7 +170,7 @@ func TsigGenerate(m *Msg, secret, requestMAC string, timersOnly bool) ([]byte, s
 
 	rr := m.Extra[len(m.Extra)-1].(*TSIG)
 	m.Extra = m.Extra[0 : len(m.Extra)-1] // kill the TSIG from the msg
-	mbuf, err := m.Pack()
+	mbuf, err := m.Pack(nil)
 	if err != nil {
 		return nil, "", err
 	}

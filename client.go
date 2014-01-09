@@ -238,7 +238,7 @@ func (co *Conn) WriteMsg(m *Msg) (err error) {
 		// Set for the next read, allthough only used in zone transfers
 		co.tsigRequestMAC = mac
 	} else {
-		out, err = m.Pack()
+		out, err = m.Pack(nil)
 	}
 	if err != nil {
 		return err
