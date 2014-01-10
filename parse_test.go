@@ -528,7 +528,7 @@ func TestSRVPacking(t *testing.T) {
 		msg.Answer = append(msg.Answer, rr)
 	}
 
-	_, err := msg.Pack(nil)
+	_, err := msg.Pack()
 	if err != nil {
 		t.Fatalf("Couldn't pack %v\n", msg)
 	}

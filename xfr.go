@@ -212,7 +212,7 @@ func (t *Transfer) WriteMsg(m *Msg) (err error) {
 		}
 		out, t.tsigRequestMAC, err = TsigGenerate(m, t.TsigSecret[ts.Hdr.Name], t.tsigRequestMAC, t.tsigTimersOnly)
 	} else {
-		out, err = m.Pack(nil)
+		out, err = m.Pack()
 	}
 	if err != nil {
 		return err

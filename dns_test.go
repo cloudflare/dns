@@ -18,7 +18,7 @@ func TestPackUnpack(t *testing.T) {
 	key.PublicKey = "AwEAAaHIwpx3w4VHKi6i1LHnTaWeHCL154Jug0Rtc9ji5qwPXpBo6A5sRv7cSsPQKPIwxLpyCrbJ4mr2L0EPOdvP6z6YfljK2ZmTbogU9aSU2fiq/4wjxbdkLyoDVgtO+JsxNN4bjr4WcWhsmk1Hg93FV9ZpkWb0Tbad8DFqNDzr//kZ"
 
 	out.Answer[0] = key
-	msg, err := out.Pack(nil)
+	msg, err := out.Pack()
 	if err != nil {
 		t.Log("Failed to pack msg with DNSKEY")
 		t.Fail()
@@ -36,7 +36,7 @@ func TestPackUnpack(t *testing.T) {
 	sig.Hdr = RR_Header{Name: "miek.nl.", Rrtype: TypeRRSIG, Class: ClassINET, Ttl: 3600}
 
 	out.Answer[0] = sig
-	msg, err = out.Pack(nil)
+	msg, err = out.Pack()
 	if err != nil {
 		t.Log("Failed to pack msg with RRSIG")
 		t.Fail()
@@ -63,7 +63,7 @@ func TestPackUnpack2(t *testing.T) {
 
 	m.Extra[0] = x
 	m.Answer[0] = rr
-	_, err := m.Pack(nil)
+	_, err := m.Pack()
 	if err != nil {
 		t.Log("Packing failed")
 		t.Fail()
@@ -91,7 +91,7 @@ func TestPackUnpack3(t *testing.T) {
 	m.Extra[0] = x1
 	m.Extra[1] = x2
 	m.Answer[0] = rr
-	b, err := m.Pack(nil)
+	b, err := m.Pack()
 	if err != nil {
 		t.Log("Packing failed")
 		t.Fail()
@@ -149,7 +149,7 @@ func TestPack(t *testing.T) {
 			t.Fail()
 			continue
 		}
-		if _, err := m.Pack(nil); err != nil {
+		if _, err := m.Pack(); err != nil {
 			t.Logf("Packing failed: %s\n", err.Error())
 			t.Fail()
 		}
@@ -162,19 +162,19 @@ func TestPack(t *testing.T) {
 	x.Ns = append(m.Ns, ns)
 	// This crashes due to the fact the a.ntpns.org isn't a FQDN
 	// How to recover() from a remove panic()?
-	if _, err := x.Pack(nil); err == nil {
+	if _, err := x.Pack(); err == nil {
 		t.Log("Packing should fail")
 		t.Fail()
 	}
 	x.Answer = make([]RR, 1)
 	x.Answer[0], err = NewRR(rr[0])
-	if _, err := x.Pack(nil); err == nil {
+	if _, err := x.Pack(); err == nil {
 		t.Log("Packing should fail")
 		t.Fail()
 	}
 	x.Question = make([]Question, 1)
 	x.Question[0] = Question{";sd#eddddséâèµâââ¥âxzztsestxssweewwsssstx@s@Zåµe@cn.pool.ntp.org.", TypeA, ClassINET}
-	if _, err := x.Pack(nil); err == nil {
+	if _, err := x.Pack(); err == nil {
 		t.Log("Packing should fail")
 		t.Fail()
 	}
@@ -229,7 +229,7 @@ func TestMsgLenTest(t *testing.T) {
 
 	for _, msg := range tests {
 		predicted := msg.Len()
-		buf, err := msg.Pack(nil)
+		buf, err := msg.Pack()
 		if err != nil {
 			t.Error(err)
 			t.Fail()
@@ -278,7 +278,7 @@ func BenchmarkMsgLenPack(b *testing.B) {
 	msg := makeMsg(name1, []RR{rrMx, rrMx}, nil, nil)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		b, _ := msg.Pack(nil)
+		b, _ := msg.Pack()
 		_ = len(b)
 	}
 }

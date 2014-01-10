@@ -424,7 +424,7 @@ func (w *response) WriteMsg(m *Msg) (err error) {
 			return err
 		}
 	}
-	data, err = m.Pack(nil)
+	data, err = m.Pack()
 	if err != nil {
 		return err
 	}
