@@ -255,6 +255,7 @@ func packDomainName(s string, msg []byte, off int, compression map[string]int, c
 	// Emit sequence of counted strings, chopping at dots.
 	begin := 0
 	bs := []byte(s)
+	ro_bs, bs_fresh, escaped_dot := s, true, false
 	for i := 0; i < ls; i++ {
 		if bs[i] == '\\' {
 			for j := i; j < ls-1; j++ {
@@ -274,11 +275,13 @@ func packDomainName(s string, msg []byte, off int, compression map[string]int, c
 				}
 				ls -= 2
 			}
+			escaped_dot = bs[i] == '.'
+			bs_fresh = false
 			continue
 		}
 
 		if bs[i] == '.' {
-			if i > 0 && bs[i-1] == '.' {
+			if i > 0 && bs[i-1] == '.' && !escaped_dot {
 				// two dots back to back is not legal
 				return lenmsg, labels, ErrRdata
 			}
@@ -304,12 +307,16 @@ func packDomainName(s string, msg []byte, off int, compression map[string]int, c
 				}
 				off++
 			}
+			if compress && !bs_fresh {
+				ro_bs = string(bs)
+				bs_fresh = true
+			}
 			// Dont try to compress '.'
-			if compression != nil && string(bs[begin:]) != "." {
-				if p, ok := compression[string(bs[begin:])]; !ok {
+			if compress && ro_bs[begin:] != "." {
+				if p, ok := compression[ro_bs[begin:]]; !ok {
 					// Only offsets smaller than this can be used.
 					if offset < maxCompressionOffset {
-						compression[string(bs[begin:])] = offset
+						compression[ro_bs[begin:]] = offset
 					}
 				} else {
 					// The first hit is the longest matching dname
@@ -328,6 +335,7 @@ func packDomainName(s string, msg []byte, off int, compression map[string]int, c
 			labels++
 			begin = i + 1
 		}
+		escaped_dot = false
 	}
 	// Root label is special
 	if len(bs) == 1 && bs[0] == '.' {
@@ -364,8 +372,9 @@ End:
 // We let them jump anywhere and stop jumping after a while.
 
 // UnpackDomainName unpacks a domain name into a string.
-func UnpackDomainName(msg []byte, off int) (s string, off1 int, err error) {
-	s = ""
+func UnpackDomainName(msg []byte, off int) (string, int, error) {
+	s := make([]byte, 0, 64)
+	off1 := 0
 	lenmsg := len(msg)
 	ptr := 0 // number of pointers followed
 Loop:
@@ -379,7 +388,7 @@ Loop:
 		case 0x00:
 			if c == 0x00 {
 				// end of name
-				if s == "" {
+				if len(s) == 0 {
 					return ".", off, nil
 				}
 				break Loop
@@ -391,16 +400,18 @@ Loop:
 			for j := off; j < off+c; j++ {
 				switch {
 				case msg[j] == '.': // literal dots
-					s += "\\."
+					s = append(s, '\\', '.')
 				case msg[j] < 32: // unprintable use \DDD
 					fallthrough
 				case msg[j] >= 127:
-					s += fmt.Sprintf("\\%03d", msg[j])
+					for _, b := range fmt.Sprintf("\\%03d", msg[j]) {
+						s = append(s, byte(b))
+					}
 				default:
-					s += string(msg[j])
+					s = append(s, msg[j])
 				}
 			}
-			s += "."
+			s = append(s, '.')
 			off += c
 		case 0xC0:
 			// pointer to somewhere else in msg.
@@ -428,24 +439,26 @@ Loop:
 	if ptr == 0 {
 		off1 = off
 	}
-	return s, off1, nil
+	return string(s), off1, nil
 }
 
 // Pack a reflect.StructValue into msg.  Struct members can only be uint8, uint16, uint32, string,
 // slices and other (often anonymous) structs.
 func packStructValue(val reflect.Value, msg []byte, off int, compression map[string]int, compress bool) (off1 int, err error) {
 	lenmsg := len(msg)
-	for i := 0; i < val.NumField(); i++ {
-		if val.Type().Field(i).Tag == `dns:"-"` {
+	numfield := val.NumField()
+	for i := 0; i < numfield; i++ {
+		typefield := val.Type().Field(i)
+		if typefield.Tag == `dns:"-"` {
 			continue
 		}
 		switch fv := val.Field(i); fv.Kind() {
 		default:
 			return lenmsg, &Error{err: "bad kind packing"}
 		case reflect.Slice:
-			switch val.Type().Field(i).Tag {
+			switch typefield.Tag {
 			default:
-				return lenmsg, &Error{"bad tag packing slice: " + val.Type().Field(i).Tag.Get("dns")}
+				return lenmsg, &Error{"bad tag packing slice: " + typefield.Tag.Get("dns")}
 			case `dns:"domain-name"`:
 				for j := 0; j < val.Field(i).Len(); j++ {
 					element := val.Field(i).Index(j).String()
@@ -614,7 +627,7 @@ func packStructValue(val reflect.Value, msg []byte, off int, compression map[str
 			msg[off+3] = byte(i)
 			off += 4
 		case reflect.Uint64:
-			switch val.Type().Field(i).Tag {
+			switch typefield.Tag {
 			default:
 				if off+8 > lenmsg {
 					return lenmsg, &Error{err: "overflow packing uint64"}
@@ -647,9 +660,9 @@ func packStructValue(val reflect.Value, msg []byte, off int, compression map[str
 			// There are multiple string encodings.
 			// The tag distinguishes ordinary strings from domain names.
 			s := fv.String()
-			switch val.Type().Field(i).Tag {
+			switch typefield.Tag {
 			default:
-				return lenmsg, &Error{"bad tag packing string: " + val.Type().Field(i).Tag.Get("dns")}
+				return lenmsg, &Error{"bad tag packing string: " + typefield.Tag.Get("dns")}
 			case `dns:"base64"`:
 				b64, e := packBase64([]byte(s))
 				if e != nil {
@@ -735,7 +748,7 @@ func packStructCompress(any interface{}, msg []byte, off int, compression map[st
 // Unpack a reflect.StructValue from msg.
 // Same restrictions as packStructValue.
 func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err error) {
-	var rdstart int
+	var rdend int
 	lenmsg := len(msg)
 	for i := 0; i < val.NumField(); i++ {
 		switch fv := val.Field(i); fv.Kind() {
@@ -749,7 +762,7 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				// HIP record slice of name (or none)
 				servers := make([]string, 0)
 				var s string
-				for off < lenmsg {
+				for off < rdend {
 					s, off, err = UnpackDomainName(msg, off)
 					if err != nil {
 						return lenmsg, err
@@ -759,9 +772,8 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				fv.Set(reflect.ValueOf(servers))
 			case `dns:"txt"`:
 				txt := make([]string, 0)
-				rdlength := off + int(val.FieldByName("Hdr").FieldByName("Rdlength").Uint())
 			Txts:
-				if off == lenmsg || rdlength == off { // dyn. updates, no rdata is OK
+				if off == lenmsg || rdend == off { // dyn. updates, no rdata is OK
 					break
 				}
 				l := int(msg[off])
@@ -770,15 +782,13 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				}
 				txt = append(txt, string(msg[off+1:off+l+1]))
 				off += l + 1
-				if off < rdlength {
+				if off < rdend {
 					// More
 					goto Txts
 				}
 				fv.Set(reflect.ValueOf(txt))
 			case `dns:"opt"`: // edns0
-				rdlength := int(val.FieldByName("Hdr").FieldByName("Rdlength").Uint())
-				endrr := off + rdlength
-				if rdlength == 0 {
+				if off == rdend {
 					// This is an EDNS0 (OPT Record) with no rdata
 					// We can safely return here.
 					break
@@ -791,18 +801,22 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				}
 				code, off = unpackUint16(msg, off)
 				optlen, off1 := unpackUint16(msg, off)
-				if off1+int(optlen) > off+rdlength {
+				if off1+int(optlen) > rdend {
 					return lenmsg, &Error{err: "overflow unpacking opt"}
 				}
 				switch code {
 				case EDNS0NSID:
 					e := new(EDNS0_NSID)
-					e.unpack(msg[off1 : off1+int(optlen)])
+					if err := e.unpack(msg[off1 : off1+int(optlen)]); err != nil {
+						return lenmsg, err
+					}
 					edns = append(edns, e)
 					off = off1 + int(optlen)
 				case EDNS0SUBNET, EDNS0SUBNETDRAFT:
 					e := new(EDNS0_SUBNET)
-					e.unpack(msg[off1 : off1+int(optlen)])
+					if err := e.unpack(msg[off1 : off1+int(optlen)]); err != nil {
+						return lenmsg, err
+					}
 					edns = append(edns, e)
 					off = off1 + int(optlen)
 					if code == EDNS0SUBNETDRAFT {
@@ -810,34 +824,44 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 					}
 				case EDNS0UL:
 					e := new(EDNS0_UL)
-					e.unpack(msg[off1 : off1+int(optlen)])
+					if err := e.unpack(msg[off1 : off1+int(optlen)]); err != nil {
+						return lenmsg, err
+					}
 					edns = append(edns, e)
 					off = off1 + int(optlen)
 				case EDNS0LLQ:
 					e := new(EDNS0_LLQ)
-					e.unpack(msg[off1 : off1+int(optlen)])
+					if err := e.unpack(msg[off1 : off1+int(optlen)]); err != nil {
+						return lenmsg, err
+					}
 					edns = append(edns, e)
 					off = off1 + int(optlen)
 				case EDNS0DAU:
 					e := new(EDNS0_DAU)
-					e.unpack(msg[off1 : off1+int(optlen)])
+					if err := e.unpack(msg[off1 : off1+int(optlen)]); err != nil {
+						return lenmsg, err
+					}
 					edns = append(edns, e)
 					off = off1 + int(optlen)
 				case EDNS0DHU:
 					e := new(EDNS0_DHU)
-					e.unpack(msg[off1 : off1+int(optlen)])
+					if err := e.unpack(msg[off1 : off1+int(optlen)]); err != nil {
+						return lenmsg, err
+					}
 					edns = append(edns, e)
 					off = off1 + int(optlen)
 				case EDNS0N3U:
 					e := new(EDNS0_N3U)
-					e.unpack(msg[off1 : off1+int(optlen)])
+					if err := e.unpack(msg[off1 : off1+int(optlen)]); err != nil {
+						return lenmsg, err
+					}
 					edns = append(edns, e)
 					off = off1 + int(optlen)
 				default:
 					// do nothing?
 					off = off1 + int(optlen)
 				}
-				if off < endrr {
+				if off < rdend {
 					goto Option
 				}
 				fv.Set(reflect.ValueOf(edns))
@@ -845,16 +869,16 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				if off == lenmsg {
 					break // dyn. update
 				}
-				if off+net.IPv4len > lenmsg {
+				if off+net.IPv4len > rdend {
 					return lenmsg, &Error{err: "overflow unpacking a"}
 				}
 				fv.Set(reflect.ValueOf(net.IPv4(msg[off], msg[off+1], msg[off+2], msg[off+3])))
 				off += net.IPv4len
 			case `dns:"aaaa"`:
-				if off == lenmsg {
+				if off == rdend {
 					break
 				}
-				if off+net.IPv6len > lenmsg {
+				if off+net.IPv6len > rdend {
 					return lenmsg, &Error{err: "overflow unpacking aaaa"}
 				}
 				fv.Set(reflect.ValueOf(net.IP{msg[off], msg[off+1], msg[off+2], msg[off+3], msg[off+4],
@@ -863,11 +887,9 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				off += net.IPv6len
 			case `dns:"wks"`:
 				// Rest of the record is the bitmap
-				rdlength := int(val.FieldByName("Hdr").FieldByName("Rdlength").Uint())
-				endrr := rdstart + rdlength
 				serv := make([]uint16, 0)
 				j := 0
-				for off < endrr {
+				for off < rdend {
 					b := msg[off]
 					// Check the bits one by one, and set the type
 					if b&0x80 == 0x80 {
@@ -899,19 +921,17 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				}
 				fv.Set(reflect.ValueOf(serv))
 			case `dns:"nsec"`: // NSEC/NSEC3
-				if off == lenmsg {
+				if off == rdend {
 					break
 				}
 				// Rest of the record is the type bitmap
-				rdlength := int(val.FieldByName("Hdr").FieldByName("Rdlength").Uint())
-				endrr := rdstart + rdlength
-				if off+2 > lenmsg {
+				if off+2 > rdend {
 					return lenmsg, &Error{err: "overflow unpacking nsecx"}
 				}
 				nsec := make([]uint16, 0)
 				length := 0
 				window := 0
-				for off+2 < endrr {
+				for off+2 < rdend {
 					window = int(msg[off])
 					length = int(msg[off+1])
 					//println("off, windows, length, end", off, window, length, endrr)
@@ -965,7 +985,7 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				return lenmsg, err
 			}
 			if val.Type().Field(i).Name == "Hdr" {
-				rdstart = off
+				rdend = off + int(val.FieldByName("Hdr").FieldByName("Rdlength").Uint())
 			}
 		case reflect.Uint8:
 			if off == lenmsg {
@@ -1023,22 +1043,26 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				return lenmsg, &Error{"bad tag unpacking string: " + val.Type().Field(i).Tag.Get("dns")}
 			case `dns:"hex"`:
 				// Rest of the RR is hex encoded, network order an issue here?
-				rdlength := int(val.FieldByName("Hdr").FieldByName("Rdlength").Uint())
-				endrr := rdstart + rdlength
-				if endrr > lenmsg {
+				hexend := rdend
+				if val.FieldByName("Hdr").FieldByName("Rrtype").Uint() == uint64(TypeHIP) {
+					hexend = off + int(val.FieldByName("HitLength").Uint())
+				}
+				if hexend > rdend {
 					return lenmsg, &Error{err: "overflow unpacking hex"}
 				}
-				s = hex.EncodeToString(msg[off:endrr])
-				off = endrr
+				s = hex.EncodeToString(msg[off:hexend])
+				off = hexend
 			case `dns:"base64"`:
 				// Rest of the RR is base64 encoded value
-				rdlength := int(val.FieldByName("Hdr").FieldByName("Rdlength").Uint())
-				endrr := rdstart + rdlength
-				if endrr > lenmsg {
+				b64end := rdend
+				if val.FieldByName("Hdr").FieldByName("Rrtype").Uint() == uint64(TypeHIP) {
+					b64end = off + int(val.FieldByName("PublicKeyLength").Uint())
+				}
+				if b64end > rdend {
 					return lenmsg, &Error{err: "overflow unpacking base64"}
 				}
-				s = unpackBase64(msg[off:endrr])
-				off = endrr
+				s = unpackBase64(msg[off:b64end])
+				off = b64end
 			case `dns:"cdomain-name"`:
 				fallthrough
 			case `dns:"domain-name"`:
@@ -1094,9 +1118,8 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				s = hex.EncodeToString(msg[off : off+size])
 				off += size
 			case `dns:"txt"`:
-				rdlength := int(val.FieldByName("Hdr").FieldByName("Rdlength").Uint())
 			Txt:
-				if off >= lenmsg || off+1+int(msg[off]) > lenmsg {
+				if off >= lenmsg || off+1+int(msg[off]) > rdend {
 					return lenmsg, &Error{err: "overflow unpacking txt"}
 				}
 				n := int(msg[off])
@@ -1105,7 +1128,7 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 					s += string(msg[off+i])
 				}
 				off += n
-				if off < rdlength {
+				if off < rdend {
 					// More to
 					goto Txt
 				}
@@ -1180,8 +1203,8 @@ func packBase32(s []byte) ([]byte, error) {
 	return buf, nil
 }
 
-// Resource record packer, pack rr into msg[off:]. See PackDomainName for documentation
-// about the compression.
+// PackRR packs a resource record rr into msg[off:].
+// See PackDomainName for documentation about the compression.
 func PackRR(rr RR, msg []byte, off int, compression map[string]int, compress bool) (off1 int, err error) {
 	if rr == nil {
 		return len(msg), &Error{err: "nil rr"}
@@ -1195,7 +1218,7 @@ func PackRR(rr RR, msg []byte, off int, compression map[string]int, compress boo
 	return off1, nil
 }
 
-// Resource record unpacker, unpack msg[off:] into an RR.
+// UnpackRR unpacks msg[off:] into an RR.
 func UnpackRR(msg []byte, off int) (rr RR, off1 int, err error) {
 	// unpack just the header, to find the rr type and length
 	var h RR_Header
@@ -1341,10 +1364,14 @@ func (dns *Msg) PackBuffer(buf []byte) (msg []byte, err error) {
 	dh.Nscount = uint16(len(ns))
 	dh.Arcount = uint16(len(extra))
 
+	// We need the uncompressed length here, because we first pack it and then compress it.
 	msg = buf
-	if packLen := dns.packLen() + 1; len(msg) < packLen {
+	compress := dns.Compress
+	dns.Compress = false
+	if packLen := dns.Len() + 1; len(msg) < packLen {
 		msg = make([]byte, packLen)
 	}
+	dns.Compress = compress
 
 	// Pack it in: header and then the pieces.
 	off := 0
@@ -1410,6 +1437,15 @@ func (dns *Msg) Unpack(msg []byte) (err error) {
 		if err != nil {
 			return err
 		}
+	}
+	// If we see a TC bit being set we return here, without
+	// an error, because technically it isn't an error. So return
+	// without parsing the potentially corrupt packet and hitting an error.
+	if dns.Truncated {
+		dns.Answer = nil
+		dns.Ns = nil
+		dns.Extra = nil
+		return nil
 	}
 	for i := 0; i < len(dns.Answer); i++ {
 		dns.Answer[i], off, err = UnpackRR(msg, off)
@@ -1481,32 +1517,13 @@ func (dns *Msg) String() string {
 	return s
 }
 
-// packLen returns the message length when in UNcompressed wire format.
-func (dns *Msg) packLen() int {
-	// Message header is always 12 bytes
-	l := 12
-	for i := 0; i < len(dns.Question); i++ {
-		l += dns.Question[i].len()
-	}
-	for i := 0; i < len(dns.Answer); i++ {
-		l += dns.Answer[i].len()
-	}
-	for i := 0; i < len(dns.Ns); i++ {
-		l += dns.Ns[i].len()
-	}
-	for i := 0; i < len(dns.Extra); i++ {
-		l += dns.Extra[i].len()
-	}
-	return l
-}
-
 // Len returns the message length when in (un)compressed wire format.
 // If dns.Compress is true compression it is taken into account. Len()
 // is provided to be a faster way to get the size of the resulting packet,
 // than packing it, measuring the size and discarding the buffer.
 func (dns *Msg) Len() int {
-	// Message header is always 12 bytes
-	l := 12
+	// We always return one more than needed.
+	l := 12 // Message header is always 12 bytes
 	var compression map[string]int
 	if dns.Compress {
 		compression = make(map[string]int)
@@ -1524,10 +1541,13 @@ func (dns *Msg) Len() int {
 			k, ok := compressionLenSearch(compression, dns.Answer[i].Header().Name)
 			if ok {
 				l += 1 - k
-			} else {
-				compressionLenHelper(compression, dns.Answer[i].Header().Name)
 			}
-			l += 1 - compressionLenType(compression, dns.Answer[i])
+			compressionLenHelper(compression, dns.Answer[i].Header().Name)
+			k, ok = compressionLenSearchType(compression, dns.Answer[i])
+			if ok {
+				l += 1 - k
+			}
+			compressionLenHelperType(compression, dns.Answer[i])
 		}
 	}
 	for i := 0; i < len(dns.Ns); i++ {
@@ -1536,24 +1556,149 @@ func (dns *Msg) Len() int {
 			k, ok := compressionLenSearch(compression, dns.Ns[i].Header().Name)
 			if ok {
 				l += 1 - k
-			} else {
-				compressionLenHelper(compression, dns.Ns[i].Header().Name)
 			}
-			l += 1 - compressionLenType(compression, dns.Ns[i])
+			compressionLenHelper(compression, dns.Ns[i].Header().Name)
+			k, ok = compressionLenSearchType(compression, dns.Ns[i])
+			if ok {
+				l += 1 - k
+			}
+			compressionLenHelperType(compression, dns.Ns[i])
 		}
 	}
 	for i := 0; i < len(dns.Extra); i++ {
+		l += dns.Extra[i].len()
 		if dns.Compress {
 			k, ok := compressionLenSearch(compression, dns.Extra[i].Header().Name)
 			if ok {
 				l += 1 - k
-			} else {
-				compressionLenHelper(compression, dns.Extra[i].Header().Name)
 			}
-			l += 1 - compressionLenType(compression, dns.Extra[i])
+			compressionLenHelper(compression, dns.Extra[i].Header().Name)
+			k, ok = compressionLenSearchType(compression, dns.Extra[i])
+			if ok {
+				l += 1 - k
+			}
+			compressionLenHelperType(compression, dns.Extra[i])
 		}
 	}
 	return l
+}
+
+// Put the parts of the name in the compression map.
+func compressionLenHelper(c map[string]int, s string) {
+	pref := ""
+	lbs := Split(s)
+	for j := len(lbs) - 1; j >= 0; j-- {
+		pref = s[lbs[j]:]
+		if _, ok := c[pref]; !ok {
+			c[pref] = len(pref)
+		}
+	}
+}
+
+// Look for each part in the compression map and returns its length,
+// keep on searching so we get the longest match.
+func compressionLenSearch(c map[string]int, s string) (int, bool) {
+	off := 0
+	end := false
+	for {
+		if _, ok := c[s[off:]]; ok {
+			return len(s[off:]), true
+		}
+		if end {
+			break
+		}
+		off, end = NextLabel(s, off)
+	}
+	return 0, false
+}
+
+// TODO(miek): should add all types, because the all can be *used* for compression.
+func compressionLenHelperType(c map[string]int, r RR) {
+	switch x := r.(type) {
+	case *NS:
+		compressionLenHelper(c, x.Ns)
+	case *MX:
+		compressionLenHelper(c, x.Mx)
+	case *CNAME:
+		compressionLenHelper(c, x.Target)
+	case *PTR:
+		compressionLenHelper(c, x.Ptr)
+	case *SOA:
+		compressionLenHelper(c, x.Ns)
+		compressionLenHelper(c, x.Mbox)
+	case *MB:
+		compressionLenHelper(c, x.Mb)
+	case *MG:
+		compressionLenHelper(c, x.Mg)
+	case *MR:
+		compressionLenHelper(c, x.Mr)
+	case *MF:
+		compressionLenHelper(c, x.Mf)
+	case *MD:
+		compressionLenHelper(c, x.Md)
+	case *RT:
+		compressionLenHelper(c, x.Host)
+	case *MINFO:
+		compressionLenHelper(c, x.Rmail)
+		compressionLenHelper(c, x.Email)
+	case *AFSDB:
+		compressionLenHelper(c, x.Hostname)
+	}
+}
+
+// Only search on compressing these types.
+func compressionLenSearchType(c map[string]int, r RR) (int, bool) {
+	switch x := r.(type) {
+	case *NS:
+		return compressionLenSearch(c, x.Ns)
+	case *MX:
+		return compressionLenSearch(c, x.Mx)
+	case *CNAME:
+		return compressionLenSearch(c, x.Target)
+	case *PTR:
+		return compressionLenSearch(c, x.Ptr)
+	case *SOA:
+		k, ok := compressionLenSearch(c, x.Ns)
+		k1, ok1 := compressionLenSearch(c, x.Mbox)
+		if !ok && !ok1 {
+			return 0, false
+		}
+		return k + k1, true
+	case *MB:
+		return compressionLenSearch(c, x.Mb)
+	case *MG:
+		return compressionLenSearch(c, x.Mg)
+	case *MR:
+		return compressionLenSearch(c, x.Mr)
+	case *MF:
+		return compressionLenSearch(c, x.Mf)
+	case *MD:
+		return compressionLenSearch(c, x.Md)
+	case *RT:
+		return compressionLenSearch(c, x.Host)
+	case *MINFO:
+		k, ok := compressionLenSearch(c, x.Rmail)
+		k1, ok1 := compressionLenSearch(c, x.Email)
+		if !ok && !ok1 {
+			return 0, false
+		}
+		return k + k1, true
+	case *AFSDB:
+		return compressionLenSearch(c, x.Hostname)
+	}
+	return 0, false
+}
+
+// Id return a 16 bits random number to be used as a
+// message id. The random provided should be good enough.
+func Id() uint16 {
+	return uint16(rand.Int()) ^ uint16(time.Now().Nanosecond())
+}
+
+// Copy returns a new RR which is a deep-copy of r.
+func Copy(r RR) RR {
+	r1 := r.copy()
+	return r1
 }
 
 // Copy returns a new *Msg which is a deep-copy of dns.
@@ -1562,167 +1707,31 @@ func (dns *Msg) Copy() *Msg {
 	r1.MsgHdr = dns.MsgHdr
 	r1.Compress = dns.Compress
 
-	r1.Question = make([]Question, len(dns.Question))
-	copy(r1.Question, dns.Question) // TODO(miek): Question is an immutable value, ok to do a shallow-copy
+	if len(dns.Question) > 0 {
+		r1.Question = make([]Question, len(dns.Question))
+		copy(r1.Question, dns.Question) // TODO(miek): Question is an immutable value, ok to do a shallow-copy
+	}
 
-	r1.Answer = make([]RR, len(dns.Answer))
-	for i := 0; i < len(dns.Answer); i++ {
-		r1.Answer[i] = dns.Answer[i].copy()
+	if len(dns.Answer) > 0 {
+		r1.Answer = make([]RR, len(dns.Answer))
+		for i := 0; i < len(dns.Answer); i++ {
+			r1.Answer[i] = dns.Answer[i].copy()
+		}
 	}
-	r1.Ns = make([]RR, len(dns.Ns))
-	for i := 0; i < len(dns.Ns); i++ {
-		r1.Ns[i] = dns.Ns[i].copy()
+
+	if len(dns.Ns) > 0 {
+		r1.Ns = make([]RR, len(dns.Ns))
+		for i := 0; i < len(dns.Ns); i++ {
+			r1.Ns[i] = dns.Ns[i].copy()
+		}
 	}
-	r1.Extra = make([]RR, len(dns.Extra))
-	for i := 0; i < len(dns.Extra); i++ {
-		r1.Extra[i] = dns.Extra[i].copy()
+
+	if len(dns.Extra) > 0 {
+		r1.Extra = make([]RR, len(dns.Extra))
+		for i := 0; i < len(dns.Extra); i++ {
+			r1.Extra[i] = dns.Extra[i].copy()
+		}
 	}
+
 	return r1
-}
-
-// Put the parts of the name in the compression map.
-func compressionLenHelper(c map[string]int, s string) {
-	pref := ""
-	lbs := SplitDomainName(s)
-	for j := len(lbs) - 1; j >= 0; j-- {
-		c[lbs[j]+"."+pref] = 1 + len(pref) + len(lbs[j])
-		pref = lbs[j] + "." + pref
-	}
-}
-
-// Look for each part in the compression map and returns its length
-func compressionLenSearch(c map[string]int, s string) (int, bool) {
-	off := 0
-	end := false
-	for {
-		if end {
-			break
-		}
-		if _, ok := c[s[off:]]; ok {
-			return len(s[off:]), true
-		}
-		off, end = NextLabel(s, off)
-	}
-	// TODO(miek): not sure if need, leave this for later debugging
-	if _, ok := c[s[off:]]; ok {
-		return len(s[off:]), true
-	}
-	return 0, false
-}
-
-// Check the ownernames too of the types that have cdomain, do
-// this manually to avoid reflection.
-func compressionLenType(c map[string]int, r RR) int {
-	switch x := r.(type) {
-	case *NS:
-		k, ok := compressionLenSearch(c, x.Ns)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Ns)
-		}
-	case *MX:
-		k, ok := compressionLenSearch(c, x.Mx)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Mx)
-		}
-	case *CNAME:
-		k, ok := compressionLenSearch(c, x.Target)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Target)
-		}
-	case *PTR:
-		k, ok := compressionLenSearch(c, x.Ptr)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Ptr)
-		}
-	case *SOA:
-		k, ok := compressionLenSearch(c, x.Ns)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Ns)
-		}
-		k, ok = compressionLenSearch(c, x.Mbox)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Mbox)
-		}
-	case *MB:
-		k, ok := compressionLenSearch(c, x.Mb)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Mb)
-		}
-	case *MG:
-		k, ok := compressionLenSearch(c, x.Mg)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Mg)
-		}
-	case *MR:
-		k, ok := compressionLenSearch(c, x.Mr)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Mr)
-		}
-	case *MF:
-		k, ok := compressionLenSearch(c, x.Mf)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Mf)
-		}
-	case *MD:
-		k, ok := compressionLenSearch(c, x.Md)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Md)
-		}
-	case *RT:
-		k, ok := compressionLenSearch(c, x.Host)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Host)
-		}
-	case *MINFO:
-		k, ok := compressionLenSearch(c, x.Rmail)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Rmail)
-		}
-		k, ok = compressionLenSearch(c, x.Email)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Email)
-		}
-	case *AFSDB:
-		k, ok := compressionLenSearch(c, x.Hostname)
-		if ok {
-			return k
-		} else {
-			compressionLenHelper(c, x.Hostname)
-		}
-	}
-	return 1 // noop when nothing is found
-}
-
-// Id return a 16 bits random number to be used as a
-// message id. The random provided should be good enough.
-func Id() uint16 {
-	return uint16(rand.Int()) ^ uint16(time.Now().Nanosecond())
 }

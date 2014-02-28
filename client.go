@@ -29,6 +29,7 @@ type Conn struct {
 // A Client defines parameters for a DNS client.
 type Client struct {
 	Net            string            // if "tcp" a TCP query will be initiated, otherwise an UDP one (default is "" for UDP)
+	UDPSize        uint16            // Minimum receive buffer for UDP messages
 	DialTimeout    time.Duration     // net.DialTimeout (ns), defaults to 2 * 1e9
 	ReadTimeout    time.Duration     // net.Conn.SetReadTimeout value for connections (ns), defaults to 2 * 1e9
 	WriteTimeout   time.Duration     // net.Conn.SetWriteTimeout value for connections (ns), defaults to 2 * 1e9
@@ -136,8 +137,13 @@ func (c *Client) exchange(m *Msg, a string) (r *Msg, rtt time.Duration, err erro
 	co.SetWriteDeadline(time.Now().Add(timeout))
 	defer co.Close()
 	opt := m.IsEdns0()
+	// If EDNS0 is used use that for size
 	if opt != nil && opt.UDPSize() >= MinMsgSize {
 		co.UDPSize = opt.UDPSize()
+	}
+	// Otherwise use the client's configured UDP size
+	if opt == nil && c.UDPSize >= MinMsgSize {
+		co.UDPSize = c.UDPSize
 	}
 	co.TsigSecret = c.TsigSecret
 	if err = co.WriteMsg(m); err != nil {
@@ -216,7 +222,7 @@ func (co *Conn) Read(p []byte) (n int, err error) {
 		n = i
 		return n, err
 	}
-	// assume udp connection
+	// UDP connection
 	n, err = co.Conn.Read(p)
 	if err != nil {
 		return n, err

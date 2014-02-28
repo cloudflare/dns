@@ -5,7 +5,10 @@
 package dns
 
 import (
+	"fmt"
+	"net"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 )
@@ -65,7 +68,7 @@ func TestServing(t *testing.T) {
 	}
 }
 
-func BenchmarkServing(b *testing.B) {
+func BenchmarkServe(b *testing.B) {
 	b.StopTimer()
 	HandleFunc("miek.nl.", HelloServer)
 	a := runtime.GOMAXPROCS(4)
@@ -92,7 +95,7 @@ func HelloServerCompress(w ResponseWriter, req *Msg) {
 	w.WriteMsg(m)
 }
 
-func BenchmarkServingCompress(b *testing.B) {
+func BenchmarkServeCompress(b *testing.B) {
 	b.StopTimer()
 	HandleFunc("miek.nl.", HelloServerCompress)
 	a := runtime.GOMAXPROCS(4)
@@ -158,5 +161,82 @@ func TestRootServer(t *testing.T) {
 	handler := mux.match(".", TypeNS)
 	if handler == nil {
 		t.Error("root match failed")
+	}
+}
+
+type maxRec struct {
+	max int
+	sync.RWMutex
+}
+
+var M = new(maxRec)
+
+func HelloServerLargeResponse(resp ResponseWriter, req *Msg) {
+	m := new(Msg)
+	m.SetReply(req)
+	m.Authoritative = true
+	m1 := 0
+	M.RLock()
+	m1 = M.max
+	M.RUnlock()
+	for i := 0; i < m1; i++ {
+		aRec := &A{
+			Hdr: RR_Header{
+				Name:   req.Question[0].Name,
+				Rrtype: TypeA,
+				Class:  ClassINET,
+				Ttl:    0,
+			},
+			A: net.ParseIP(fmt.Sprintf("127.0.0.%d", i+1)).To4(),
+		}
+		m.Answer = append(m.Answer, aRec)
+	}
+	resp.WriteMsg(m)
+}
+
+func TestServingLargeResponses(t *testing.T) {
+	mux := NewServeMux()
+	mux.HandleFunc("example.", HelloServerLargeResponse)
+
+	server := &Server{
+		Addr:    "127.0.0.1:10000",
+		Net:     "udp",
+		Handler: mux,
+	}
+
+	go func() {
+		server.ListenAndServe()
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	// Create request
+	m := new(Msg)
+	m.SetQuestion("web.service.example.", TypeANY)
+
+	c := new(Client)
+	c.Net = "udp"
+	M.Lock()
+	M.max = 2
+	M.Unlock()
+	_, _, err := c.Exchange(m, "127.0.0.1:10000")
+	if err != nil {
+		t.Logf("Failed to exchange: %s", err.Error())
+		t.Fail()
+	}
+	// This must fail
+	M.Lock()
+	M.max = 20
+	M.Unlock()
+	_, _, err = c.Exchange(m, "127.0.0.1:10000")
+	if err == nil {
+		t.Logf("Failed to fail exchange, this should generate packet error")
+		t.Fail()
+	}
+	// But this must work again
+	c.UDPSize = 7000
+	_, _, err = c.Exchange(m, "127.0.0.1:10000")
+	if err != nil {
+		t.Logf("Failed to exchange: %s", err.Error())
+		t.Fail()
 	}
 }

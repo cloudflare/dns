@@ -63,7 +63,7 @@ correctly, the following should work:
 ## Examples
 
 A short "how to use the API" is at the beginning of dns.go (this also will show
-when you call `go doc github.com/miekg/dns`.
+when you call `godoc github.com/miekg/dns`).
 
 Example programs can be found in the `github.com/miekg/exdns` repository.
 
@@ -78,7 +78,7 @@ Example programs can be found in the `github.com/miekg/exdns` repository.
 * 1995 - IXFR
 * 1996 - DNS notify
 * 2136 - DNS Update (dynamic updates)
-* 2181 - RRset definition
+* 2181 - RRset definition - there is no RRset type though, just []RR
 * 2537 - RSAMD5 DNS keys
 * 2065 - DNSSEC (updated in later RFCs)
 * 2671 - EDNS record
@@ -110,9 +110,9 @@ Example programs can be found in the `github.com/miekg/exdns` repository.
 * 6742 - ILNP DNS
 * 6891 - EDNS0 update
 * 6895 - DNS IANA considerations
+* 7043 - EUI48/EUI64 records
 * xxxx - URI record (draft)
 * xxxx - EDNS0 DNS Update Lease (draft)
-* xxxx - IEU48/IEU64 records (draft)
 * xxxx - Algorithm-Signal (draft)
 
 ## Loosely based upon
@@ -121,3 +121,12 @@ Example programs can be found in the `github.com/miekg/exdns` repository.
 * `NSD`
 * `Net::DNS`
 * `GRONG`
+
+## TODO
+
+* Support for on-the-fly-signing or check how to do it;
+* Ratelimiting? server side (RRL);
+* Make a srv.Stop() that stops the server;
+* privatekey.Precompute() when signing?
+* Last remaining RRs: APL, ATMA, A6, KEY, SIG and NXT;
+* CAA parsing is broken.

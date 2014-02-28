@@ -205,6 +205,8 @@ func (k *DNSKEY) ToDS(h int) *DS {
 // The rest is copied from the RRset. Sign returns true when the signing went OK,
 // otherwise false.
 // There is no check if RRSet is a proper (RFC 2181) RRSet.
+// If OrigTTL is non zero, it is used as-is, otherwise the TTL of the RRset
+// is used as the OrigTTL.
 func (rr *RRSIG) Sign(k PrivateKey, rrset []RR) error {
 	if k == nil {
 		return ErrPrivKey
@@ -217,8 +219,9 @@ func (rr *RRSIG) Sign(k PrivateKey, rrset []RR) error {
 	rr.Hdr.Rrtype = TypeRRSIG
 	rr.Hdr.Name = rrset[0].Header().Name
 	rr.Hdr.Class = rrset[0].Header().Class
-	rr.OrigTtl = rrset[0].Header().Ttl
-	rr.TypeCovered = rrset[0].Header().Rrtype
+	if rr.OrigTtl == 0 { // If set don't override
+		rr.OrigTtl = rrset[0].Header().Ttl
+	}
 	rr.TypeCovered = rrset[0].Header().Rrtype
 	rr.Labels = uint8(CountLabel(rrset[0].Header().Name))
 
@@ -424,9 +427,15 @@ func (rr *RRSIG) Verify(k *DNSKEY, rrset []RR) error {
 }
 
 // ValidityPeriod uses RFC1982 serial arithmetic to calculate
-// if a signature period is valid.
-func (rr *RRSIG) ValidityPeriod() bool {
-	utc := time.Now().UTC().Unix()
+// if a signature period is valid. If t is the zero time, the
+// current time is taken other t is.
+func (rr *RRSIG) ValidityPeriod(t time.Time) bool {
+	var utc int64
+	if t.IsZero() {
+		utc = time.Now().UTC().Unix()
+	} else {
+		utc = t.UTC().Unix()
+	}
 	modi := (int64(rr.Inception) - utc) / year68
 	mode := (int64(rr.Expiration) - utc) / year68
 	ti := int64(rr.Inception) + (modi * year68)

@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"strings"
 	"testing"
+	"time"
 )
 
 func getKey() *DNSKEY {
@@ -124,14 +125,14 @@ func TestSignature(t *testing.T) {
 	sig.Signature = "AwEAAaHIwpx3w4VHKi6i1LHnTaWeHCL154Jug0Rtc9ji5qwPXpBo6A5sRv7cSsPQKPIwxLpyCrbJ4mr2L0EPOdvP6z6YfljK2ZmTbogU9aSU2fiq/4wjxbdkLyoDVgtO+JsxNN4bjr4WcWhsmk1Hg93FV9ZpkWb0Tbad8DFqNDzr//kZ"
 
 	// Should not be valid
-	if sig.ValidityPeriod() {
+	if sig.ValidityPeriod(time.Now()) {
 		t.Log("Should not be valid")
 		t.Fail()
 	}
 
 	sig.Inception = 315565800   //Tue Jan  1 10:10:00 CET 1980
 	sig.Expiration = 4102477800 //Fri Jan  1 10:10:00 CET 2100
-	if !sig.ValidityPeriod() {
+	if !sig.ValidityPeriod(time.Now()) {
 		t.Log("Should be valid")
 		t.Fail()
 	}
@@ -159,6 +160,12 @@ func TestSignVerify(t *testing.T) {
 	soa1.Expire = 604800
 	soa1.Minttl = 86400
 
+	srv := new(SRV)
+	srv.Hdr = RR_Header{"srv.miek.nl.", TypeSRV, ClassINET, 14400, 0}
+	srv.Port = 1000
+	srv.Weight = 800
+	srv.Target = "web1.miek.nl."
+
 	// With this key
 	key := new(DNSKEY)
 	key.Hdr.Rrtype = TypeDNSKEY
@@ -174,7 +181,7 @@ func TestSignVerify(t *testing.T) {
 	sig := new(RRSIG)
 	sig.Hdr = RR_Header{"miek.nl.", TypeRRSIG, ClassINET, 14400, 0}
 	sig.TypeCovered = soa.Hdr.Rrtype
-	sig.Labels = uint8(CountLabel(soa.Hdr.Name))
+	sig.Labels = uint8(CountLabel(soa.Hdr.Name)) // works for all 3
 	sig.OrigTtl = soa.Hdr.Ttl
 	sig.Expiration = 1296534305 // date -u '+%s' -d"2011-02-01 04:25:05"
 	sig.Inception = 1293942305  // date -u '+%s' -d"2011-01-02 04:25:05"
@@ -182,9 +189,9 @@ func TestSignVerify(t *testing.T) {
 	sig.SignerName = key.Hdr.Name
 	sig.Algorithm = RSASHA256
 
-	for _, r := range []RR{soa, soa1} {
+	for _, r := range []RR{soa, soa1, srv} {
 		if sig.Sign(privkey, []RR{r}) != nil {
-			t.Log("Failure to sign the SOA record")
+			t.Log("Failure to sign the record")
 			t.Fail()
 			continue
 		}
