@@ -266,14 +266,18 @@ func packDomainName(s string, msg []byte, off int, compression map[string]int, c
 				return lenmsg, labels, ErrBuf
 			}
 			// check for \DDD
-			if i+2 < ls && bs[i] >= '0' && bs[i] <= '9' &&
-				bs[i+1] >= '0' && bs[i+1] <= '9' &&
-				bs[i+2] >= '0' && bs[i+2] <= '9' {
-				bs[i] = byte((bs[i]-'0')*100 + (bs[i+1]-'0')*10 + (bs[i+2] - '0'))
+			if i+2 < ls && isDigit(bs[i]) && isDigit(bs[i+1]) && isDigit(bs[i+2]) {
+				bs[i] = dddToByte(bs[i:])
 				for j := i + 1; j < ls-2; j++ {
 					bs[j] = bs[j+2]
 				}
 				ls -= 2
+			} else if bs[i] == 't' {
+				bs[i] = '\t'
+			} else if bs[i] == 'r' {
+				bs[i] = '\r'
+			} else if bs[i] == 'n' {
+				bs[i] = '\n'
 			}
 			escaped_dot = bs[i] == '.'
 			bs_fresh = false
@@ -398,17 +402,21 @@ Loop:
 				return "", lenmsg, ErrBuf
 			}
 			for j := off; j < off+c; j++ {
-				switch {
-				case msg[j] == '.': // literal dots
-					s = append(s, '\\', '.')
-				case msg[j] < 32: // unprintable use \DDD
+				switch b := msg[j]; b {
+				case '.', '(', ')', ';', ' ', '@':
 					fallthrough
-				case msg[j] >= 127:
-					for _, b := range fmt.Sprintf("\\%03d", msg[j]) {
-						s = append(s, byte(b))
-					}
+				case '"', '\\':
+					s = append(s, '\\', b)
+				case '\t':
+					s = append(s, '\\', 't')
+				case '\r':
+					s = append(s, '\\', 'r')
 				default:
-					s = append(s, msg[j])
+					if b < 32 || b >= 127 { // unprintable use \DDD
+						s = append(s, fmt.Sprintf("\\%03d", b)...)
+					} else {
+						s = append(s, b)
+					}
 				}
 			}
 			s = append(s, '.')
@@ -442,9 +450,118 @@ Loop:
 	return string(s), off1, nil
 }
 
+func packTxt(txt []string, msg []byte, offset int, tmp []byte) (int, error) {
+	var err error
+	if len(txt) == 0 {
+		if offset >= len(msg) {
+			return offset, ErrBuf
+		}
+		msg[offset] = 0
+		return offset, nil
+	}
+	for i := range txt {
+		if len(txt[i]) > len(tmp) {
+			return offset, ErrBuf
+		}
+		offset, err = packTxtString(txt[i], msg, offset, tmp)
+		if err != nil {
+			return offset, err
+		}
+	}
+	return offset, err
+}
+
+func packTxtString(s string, msg []byte, offset int, tmp []byte) (int, error) {
+	lenByteOffset := offset
+	if offset >= len(msg) {
+		return offset, ErrBuf
+	}
+	offset++
+	bs := tmp[:len(s)]
+	copy(bs, s)
+	for i := 0; i < len(bs); i++ {
+		if len(msg) <= offset {
+			return offset, ErrBuf
+		}
+		if bs[i] == '\\' {
+			i++
+			if i == len(bs) {
+				break
+			}
+			// check for \DDD
+			if i+2 < len(bs) && isDigit(bs[i]) && isDigit(bs[i+1]) && isDigit(bs[i+2]) {
+				msg[offset] = dddToByte(bs[i:])
+				i += 2
+			} else if bs[i] == 't' {
+				msg[offset] = '\t'
+			} else if bs[i] == 'r' {
+				msg[offset] = '\r'
+			} else if bs[i] == 'n' {
+				msg[offset] = '\n'
+			} else {
+				msg[offset] = bs[i]
+			}
+		} else {
+			msg[offset] = bs[i]
+		}
+		offset++
+	}
+	l := offset - lenByteOffset - 1
+	if l > 255 {
+		return offset, &Error{err: "string exceeded 255 bytes in txt"}
+	}
+	msg[lenByteOffset] = byte(l)
+	return offset, nil
+}
+
+func unpackTxt(msg []byte, offset, rdend int) ([]string, int, error) {
+	var err error
+	var ss []string
+	var s string
+	for offset < rdend && err == nil {
+		s, offset, err = unpackTxtString(msg, offset)
+		if err == nil {
+			ss = append(ss, s)
+		}
+	}
+	return ss, offset, err
+}
+
+func unpackTxtString(msg []byte, offset int) (string, int, error) {
+	if offset+1 > len(msg) {
+		return "", offset, &Error{err: "overflow unpacking txt"}
+	}
+	l := int(msg[offset])
+	if offset+l+1 > len(msg) {
+		return "", offset, &Error{err: "overflow unpacking txt"}
+	}
+	s := make([]byte, 0, l)
+	for _, b := range msg[offset+1 : offset+1+l] {
+		switch b {
+		case '"', '\\':
+			s = append(s, '\\', b)
+		case '\t':
+			s = append(s, `\t`...)
+		case '\r':
+			s = append(s, `\r`...)
+		case '\n':
+			s = append(s, `\n`...)
+		default:
+			if b < 32 || b > 127 { // unprintable
+				s = append(s, fmt.Sprintf("\\%03d", b)...)
+			} else {
+				s = append(s, b)
+			}
+		}
+	}
+	offset += 1 + l
+	return string(s), offset, nil
+}
+
 // Pack a reflect.StructValue into msg.  Struct members can only be uint8, uint16, uint32, string,
 // slices and other (often anonymous) structs.
 func packStructValue(val reflect.Value, msg []byte, off int, compression map[string]int, compress bool) (off1 int, err error) {
+	var txtTmp []byte
 	lenmsg := len(msg)
 	numfield := val.NumField()
 	for i := 0; i < numfield; i++ {
@@ -468,18 +585,12 @@ func packStructValue(val reflect.Value, msg []byte, off int, compression map[str
 					}
 				}
 			case `dns:"txt"`:
-				for j := 0; j < val.Field(i).Len(); j++ {
-					element := val.Field(i).Index(j).String()
-					// Counted string: 1 byte length.
-					if len(element) > 255 || off+1+len(element) > lenmsg {
-						return lenmsg, &Error{err: "overflow packing txt"}
-					}
-					msg[off] = byte(len(element))
-					off++
-					for i := 0; i < len(element); i++ {
-						msg[off+i] = element[i]
-					}
-					off += len(element)
+				if txtTmp == nil {
+					txtTmp = make([]byte, 256*4+1)
+				}
+				off, err = packTxt(fv.Interface().([]string), msg, off, txtTmp)
+				if err != nil {
+					return lenmsg, err
 				}
 			case `dns:"opt"`: // edns
 				for j := 0; j < val.Field(i).Len(); j++ {
@@ -712,16 +823,13 @@ func packStructValue(val reflect.Value, msg []byte, off int, compression map[str
 			case `dns:"txt"`:
 				fallthrough
 			case "":
-				// Counted string: 1 byte length.
-				if len(s) > 255 || off+1+len(s) > lenmsg {
-					return lenmsg, &Error{err: "overflow packing string"}
+				if txtTmp == nil {
+					txtTmp = make([]byte, 256*4+1)
 				}
-				msg[off] = byte(len(s))
-				off++
-				for i := 0; i < len(s); i++ {
-					msg[off+i] = s[i]
+				off, err = packTxtString(fv.String(), msg, off, txtTmp)
+				if err != nil {
+					return lenmsg, err
 				}
-				off += len(s)
 			}
 		}
 	}
@@ -771,20 +879,13 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				}
 				fv.Set(reflect.ValueOf(servers))
 			case `dns:"txt"`:
-				txt := make([]string, 0)
-			Txts:
-				if off == lenmsg || rdend == off { // dyn. updates, no rdata is OK
+				if off == lenmsg || rdend == off {
 					break
 				}
-				l := int(msg[off])
-				if off+l+1 > lenmsg { // TODO(miek): +1 or ... not ...
-					return lenmsg, &Error{err: "overflow unpacking txt"}
-				}
-				txt = append(txt, string(msg[off+1:off+l+1]))
-				off += l + 1
-				if off < rdend {
-					// More
-					goto Txts
+				var txt []string
+				txt, off, err = unpackTxt(msg, off, rdend)
+				if err != nil {
+					return lenmsg, err
 				}
 				fv.Set(reflect.ValueOf(txt))
 			case `dns:"opt"`: // edns0
@@ -878,7 +979,7 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				if off == rdend {
 					break
 				}
-				if off+net.IPv6len > rdend {
+				if off+net.IPv6len > rdend || off+net.IPv6len > lenmsg {
 					return lenmsg, &Error{err: "overflow unpacking aaaa"}
 				}
 				fv.Set(reflect.ValueOf(net.IP{msg[off], msg[off+1], msg[off+2], msg[off+3], msg[off+4],
@@ -890,6 +991,9 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				serv := make([]uint16, 0)
 				j := 0
 				for off < rdend {
+					if off+1 > lenmsg {
+						return lenmsg, &Error{err: "overflow unpacking wks"}
+					}
 					b := msg[off]
 					// Check the bits one by one, and set the type
 					if b&0x80 == 0x80 {
@@ -925,7 +1029,7 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 					break
 				}
 				// Rest of the record is the type bitmap
-				if off+2 > rdend {
+				if off+2 > rdend || off+2 > lenmsg {
 					return lenmsg, &Error{err: "overflow unpacking nsecx"}
 				}
 				nsec := make([]uint16, 0)
@@ -939,15 +1043,18 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 						// A length window of zero is strange. If there
 						// the window should not have been specified. Bail out
 						// println("dns: length == 0 when unpacking NSEC")
-						return lenmsg, ErrRdata
+						return lenmsg, &Error{err: "overflow unpacking nsecx"}
 					}
 					if length > 32 {
-						return lenmsg, ErrRdata
+						return lenmsg, &Error{err: "overflow unpacking nsecx"}
 					}
 
 					// Walk the bytes in the window - and check the bit settings...
 					off += 2
 					for j := 0; j < length; j++ {
+						if off+j+1 > lenmsg {
+							return lenmsg, &Error{err: "overflow unpacking nsecx"}
+						}
 						b := msg[off+j]
 						// Check the bits one by one, and set the type
 						if b&0x80 == 0x80 {
@@ -1042,12 +1149,11 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 			default:
 				return lenmsg, &Error{"bad tag unpacking string: " + val.Type().Field(i).Tag.Get("dns")}
 			case `dns:"hex"`:
-				// Rest of the RR is hex encoded, network order an issue here?
 				hexend := rdend
 				if val.FieldByName("Hdr").FieldByName("Rrtype").Uint() == uint64(TypeHIP) {
 					hexend = off + int(val.FieldByName("HitLength").Uint())
 				}
-				if hexend > rdend {
+				if hexend > rdend || hexend > lenmsg {
 					return lenmsg, &Error{err: "overflow unpacking hex"}
 				}
 				s = hex.EncodeToString(msg[off:hexend])
@@ -1058,7 +1164,7 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				if val.FieldByName("Hdr").FieldByName("Rrtype").Uint() == uint64(TypeHIP) {
 					b64end = off + int(val.FieldByName("PublicKeyLength").Uint())
 				}
-				if b64end > rdend {
+				if b64end > rdend || b64end > lenmsg {
 					return lenmsg, &Error{err: "overflow unpacking base64"}
 				}
 				s = unpackBase64(msg[off:b64end])
@@ -1118,35 +1224,21 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 				s = hex.EncodeToString(msg[off : off+size])
 				off += size
 			case `dns:"txt"`:
-			Txt:
-				if off >= lenmsg || off+1+int(msg[off]) > rdend {
-					return lenmsg, &Error{err: "overflow unpacking txt"}
-				}
-				n := int(msg[off])
-				off++
-				for i := 0; i < n; i++ {
-					s += string(msg[off+i])
-				}
-				off += n
-				if off < rdend {
-					// More to
-					goto Txt
-				}
+				fallthrough
 			case "":
-				if off >= lenmsg || off+1+int(msg[off]) > lenmsg {
-					return lenmsg, &Error{err: "overflow unpacking string"}
-				}
-				n := int(msg[off])
-				off++
-				for i := 0; i < n; i++ {
-					s += string(msg[off+i])
-				}
-				off += n
+				s, off, err = unpackTxtString(msg, off)
 			}
 			fv.SetString(s)
 		}
 	}
 	return off, nil
+}
+
+// Helpers for dealing with escaped bytes
+func isDigit(b byte) bool { return b >= '0' && b <= '9' }
+
+func dddToByte(s []byte) byte {
+	return byte((s[0]-'0')*100 + (s[1]-'0')*10 + (s[2] - '0'))
 }
 
 // Helper function for unpacking
@@ -1214,8 +1306,10 @@ func PackRR(rr RR, msg []byte, off int, compression map[string]int, compress boo
 	if err != nil {
 		return len(msg), err
 	}
-	rawSetRdlength(msg, off, off1)
-	return off1, nil
+	if rawSetRdlength(msg, off, off1) {
+		return off1, nil
+	}
+	return off, ErrRdata
 }
 
 // UnpackRR unpacks msg[off:] into an RR.
@@ -1528,7 +1622,6 @@ func (dns *Msg) Len() int {
 	if dns.Compress {
 		compression = make(map[string]int)
 	}
-
 	for i := 0; i < len(dns.Question); i++ {
 		l += dns.Question[i].len()
 		if dns.Compress {
