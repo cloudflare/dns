@@ -45,7 +45,8 @@ const (
 	EDNS0DHU         = 0x6    // DS Hash Understood
 	EDNS0N3U         = 0x7    // NSEC3 Hash Understood
 	EDNS0SUBNET      = 0x8    // client-subnet (RFC6891)
-	EDNS0SUBNETDRAFT = 0x50fa // client-subnet draft: http://tools.ietf.org/html/draft-vandergaast-edns-client-subnet-01
+	EDNS0EXPIRE      = 0x9    // EDNS0 expire
+	EDNS0SUBNETDRAFT = 0x50fa // Don't use! Use EDNS0SUBNET
 	_DO              = 1 << 7 // dnssec ok
 )
 
@@ -173,6 +174,7 @@ type EDNS0 interface {
 //	o.Hdr.Rrtype = dns.TypeOPT
 //	e := new(dns.EDNS0_NSID)
 //	e.Code = dns.EDNS0NSID
+//	e.Nsid = "AA"
 //	o.Option = append(o.Option, e)
 type EDNS0_NSID struct {
 	Code uint16 // Always EDNS0NSID
@@ -333,6 +335,9 @@ type EDNS0_UL struct {
 	Lease uint32
 }
 
+func (e *EDNS0_UL) Option() uint16 { return EDNS0UL }
+func (e *EDNS0_UL) String() string { return strconv.FormatUint(uint64(e.Lease), 10) }
+
 // Copied: http://golang.org/src/pkg/net/dnsmsg.go
 func (e *EDNS0_UL) pack() ([]byte, error) {
 	b := make([]byte, 4)
@@ -343,7 +348,6 @@ func (e *EDNS0_UL) pack() ([]byte, error) {
 	return b, nil
 }
 
-func (e *EDNS0_UL) Option() uint16 { return EDNS0UL }
 func (e *EDNS0_UL) unpack(b []byte) error {
 	if len(b) < 4 {
 		return ErrBuf
@@ -351,7 +355,6 @@ func (e *EDNS0_UL) unpack(b []byte) error {
 	e.Lease = uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
 	return nil
 }
-func (e *EDNS0_UL) String() string { return strconv.FormatUint(uint64(e.Lease), 10) }
 
 // Long Lived Queries: http://tools.ietf.org/html/draft-sekar-dns-llq-01
 // Implemented for completeness, as the EDNS0 type code is assigned.
@@ -468,4 +471,29 @@ func (e *EDNS0_N3U) String() string {
 		}
 	}
 	return s
+}
+
+type EDNS0_EXPIRE struct {
+	Code   uint16 // Always EDNS0EXPIRE
+	Expire uint32
+}
+
+func (e *EDNS0_EXPIRE) Option() uint16 { return EDNS0EXPIRE }
+func (e *EDNS0_EXPIRE) String() string { return strconv.FormatUint(uint64(e.Expire), 10) }
+
+func (e *EDNS0_EXPIRE) pack() ([]byte, error) {
+	b := make([]byte, 4)
+	b[0] = byte(e.Expire >> 24)
+	b[1] = byte(e.Expire >> 16)
+	b[2] = byte(e.Expire >> 8)
+	b[3] = byte(e.Expire)
+	return b, nil
+}
+
+func (e *EDNS0_EXPIRE) unpack(b []byte) error {
+	if len(b) < 4 {
+		return ErrBuf
+	}
+	e.Expire = uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+	return nil
 }

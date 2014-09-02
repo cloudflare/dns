@@ -80,6 +80,7 @@ const (
 	TypeRKEY       uint16 = 57
 	TypeTALINK     uint16 = 58
 	TypeCDS        uint16 = 59
+	TypeOPENPGPKEY uint16 = 61
 	TypeSPF        uint16 = 99
 	TypeUINFO      uint16 = 100
 	TypeUID        uint16 = 101
@@ -1519,6 +1520,18 @@ func (rr *NIMLOC) copy() RR           { return &NIMLOC{*rr.Hdr.copyHeader(), rr.
 func (rr *NIMLOC) String() string     { return rr.Hdr.String() + strings.ToUpper(rr.Locator) }
 func (rr *NIMLOC) len() int           { return rr.Hdr.len() + len(rr.Locator)/2 }
 
+type OPENPGPKEY struct {
+	Hdr       RR_Header
+	PublicKey string `dns:"base64"`
+}
+
+func (rr *OPENPGPKEY) Header() *RR_Header { return &rr.Hdr }
+func (rr *OPENPGPKEY) copy() RR           { return &OPENPGPKEY{*rr.Hdr.copyHeader(), rr.PublicKey} }
+func (rr *OPENPGPKEY) String() string     { return rr.Hdr.String() + rr.PublicKey }
+func (rr *OPENPGPKEY) len() int {
+	return rr.Hdr.len() + base64.StdEncoding.DecodedLen(len(rr.PublicKey))
+}
+
 // TimeToString translates the RRSIG's incep. and expir. times to the
 // string representation used when printing the record.
 // It takes serial arithmetic (RFC 1982) into account.
@@ -1619,6 +1632,7 @@ var rr_mk = map[uint16]func() RR{
 	TypeNSEC3:      func() RR { return new(NSEC3) },
 	TypeNSEC3PARAM: func() RR { return new(NSEC3PARAM) },
 	TypeNSEC:       func() RR { return new(NSEC) },
+	TypeOPENPGPKEY: func() RR { return new(OPENPGPKEY) },
 	TypeOPT:        func() RR { return new(OPT) },
 	TypePTR:        func() RR { return new(PTR) },
 	TypeRKEY:       func() RR { return new(RKEY) },

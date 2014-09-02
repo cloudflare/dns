@@ -23,18 +23,18 @@ func TestDotInName(t *testing.T) {
 	PackDomainName("aa\\.bb.nl.", buf, 0, nil, false)
 	// index 3 must be a real dot
 	if buf[3] != '.' {
-		t.Log("Dot should be a real dot")
+		t.Log("dot should be a real dot")
 		t.Fail()
 	}
 
 	if buf[6] != 2 {
-		t.Log("This must have the value 2")
+		t.Log("this must have the value 2")
 		t.Fail()
 	}
 	dom, _, _ := UnpackDomainName(buf, 0)
 	// printing it should yield the backspace again
 	if dom != "aa\\.bb.nl." {
-		t.Log("Dot should have been escaped: " + dom)
+		t.Log("dot should have been escaped: " + dom)
 		t.Fail()
 	}
 }
@@ -44,11 +44,11 @@ func TestDotLastInLabel(t *testing.T) {
 	buf := make([]byte, 20)
 	_, err := PackDomainName(sample, buf, 0, nil, false)
 	if err != nil {
-		t.Fatalf("Unexpected error packing domain: %s", err)
+		t.Fatalf("unexpected error packing domain: %s", err)
 	}
 	dom, _, _ := UnpackDomainName(buf, 0)
 	if dom != sample {
-		t.Fatalf("Unpacked domain `%s' doesn't match packed domain", dom)
+		t.Fatalf("unpacked domain `%s' doesn't match packed domain", dom)
 	}
 }
 
@@ -57,17 +57,17 @@ func TestTooLongDomainName(t *testing.T) {
 	dom := l + l + l + l + l + l + l
 	_, e := NewRR(dom + " IN A 127.0.0.1")
 	if e == nil {
-		t.Log("Should be too long")
+		t.Log("should be too long")
 		t.Fail()
 	} else {
-		t.Logf("Error is %s", e.Error())
+		t.Logf("error is %s", e.Error())
 	}
 	_, e = NewRR("..com. IN A 127.0.0.1")
 	if e == nil {
-		t.Log("Should fail")
+		t.Log("should fail")
 		t.Fail()
 	} else {
-		t.Logf("Error is %s", e.Error())
+		t.Logf("error is %s", e.Error())
 	}
 }
 
@@ -79,18 +79,18 @@ func TestDomainName(t *testing.T) {
 
 	for _, ts := range tests {
 		if _, err := PackDomainName(ts, dbuff, 0, nil, false); err != nil {
-			t.Log("Not a valid domain name")
+			t.Log("not a valid domain name")
 			t.Fail()
 			continue
 		}
 		n, _, err := UnpackDomainName(dbuff, 0)
 		if err != nil {
-			t.Log("Failed to unpack packed domain name")
+			t.Log("failed to unpack packed domain name")
 			t.Fail()
 			continue
 		}
 		if ts != n {
-			t.Logf("Must be equal: in: %s, out: %s\n", ts, n)
+			t.Logf("must be equal: in: %s, out: %s\n", ts, n)
 			t.Fail()
 		}
 	}
@@ -120,18 +120,18 @@ func TestDomainNameAndTXTEscapes(t *testing.T) {
 		}
 		repacked := make([]byte, len(rrbytes))
 		if _, err := PackRR(rr2, repacked, 0, nil, false); err != nil {
-			t.Logf("Error packing parsed RR: %v", err)
-			t.Logf(" Original Bytes: %v\n", rrbytes)
-			t.Logf("Unpacked Struct: %V\n", rr1)
-			t.Logf("  Parsed Struct: %V\n", rr2)
+			t.Logf("error packing parsed RR: %v", err)
+			t.Logf(" original Bytes: %v\n", rrbytes)
+			t.Logf("unpacked Struct: %V\n", rr1)
+			t.Logf("  parsed Struct: %V\n", rr2)
 			t.Fail()
 		}
 		if !bytes.Equal(repacked, rrbytes) {
-			t.Log("Packed bytes don't match original bytes")
-			t.Logf(" Original bytes: %v", rrbytes)
-			t.Logf("   Packed bytes: %v", repacked)
-			t.Logf("Unpacked struct: %V", rr1)
-			t.Logf("  Parsed struct: %V", rr2)
+			t.Log("packed bytes don't match original bytes")
+			t.Logf(" original bytes: %v", rrbytes)
+			t.Logf("   packed bytes: %v", repacked)
+			t.Logf("unpacked struct: %V", rr1)
+			t.Logf("  parsed struct: %V", rr2)
 			t.Fail()
 		}
 	}
@@ -176,16 +176,16 @@ func TestDomainQuick(t *testing.T) {
 		buf := make([]byte, 255)
 		off, err := PackDomainName(ds, buf, 0, nil, false)
 		if err != nil {
-			t.Logf("Error packing domain: %s", err.Error())
-			t.Logf(" Bytes: %v\n", db)
-			t.Logf("String: %v\n", ds)
+			t.Logf("error packing domain: %s", err.Error())
+			t.Logf(" bytes: %v\n", db)
+			t.Logf("string: %v\n", ds)
 			return false
 		}
 		if !bytes.Equal(db, buf[:off]) {
-			t.Logf("Repacked domain doesn't match original:")
-			t.Logf("Src Bytes: %v", db)
-			t.Logf("   String: %v", ds)
-			t.Logf("Out Bytes: %v", buf[:off])
+			t.Logf("repacked domain doesn't match original:")
+			t.Logf("src bytes: %v", db)
+			t.Logf("   string: %v", ds)
+			t.Logf("out bytes: %v", buf[:off])
 			return false
 		}
 		return true
@@ -242,15 +242,15 @@ func TestTXTRRQuick(t *testing.T) {
 		buf := make([]byte, len(rrbytes)*3)
 		off, err := PackRR(rr, buf, 0, nil, false)
 		if err != nil {
-			t.Logf("Pack Error: %s\nRR: %V", err.Error(), rr)
+			t.Logf("pack Error: %s\nRR: %V", err.Error(), rr)
 			return false
 		}
 		buf = buf[:off]
 		if !bytes.Equal(buf, rrbytes) {
-			t.Logf("Packed bytes don't match original bytes")
-			t.Logf("Src Bytes: %v", rrbytes)
-			t.Logf("   Struct: %V", rr)
-			t.Logf("Out Bytes: %v", buf)
+			t.Logf("packed bytes don't match original bytes")
+			t.Logf("src bytes: %v", rrbytes)
+			t.Logf("   struct: %V", rr)
+			t.Logf("oUt bytes: %v", buf)
 			return false
 		}
 		if len(rdata) == 0 {
@@ -260,35 +260,35 @@ func TestTXTRRQuick(t *testing.T) {
 		rrString := rr.String()
 		rr2, err := NewRR(rrString)
 		if err != nil {
-			t.Logf("Error parsing own output: %s", err.Error())
-			t.Logf("Struct: %V", rr)
-			t.Logf("String: %v", rrString)
+			t.Logf("error parsing own output: %s", err.Error())
+			t.Logf("struct: %V", rr)
+			t.Logf("string: %v", rrString)
 			return false
 		}
 		if rr2.String() != rrString {
-			t.Logf("Parsed rr.String() doesn't match original string")
-			t.Logf("Original: %v", rrString)
-			t.Logf("  Parsed: %v", rr2.String())
+			t.Logf("parsed rr.String() doesn't match original string")
+			t.Logf("original: %v", rrString)
+			t.Logf("  parsed: %v", rr2.String())
 			return false
 		}
 
 		buf = make([]byte, len(rrbytes)*3)
 		off, err = PackRR(rr2, buf, 0, nil, false)
 		if err != nil {
-			t.Logf("Error packing parsed rr: %s", err.Error())
-			t.Logf("Unpacked Struct: %V", rr)
-			t.Logf("         String: %v", rrString)
-			t.Logf("  Parsed Struct: %V", rr2)
+			t.Logf("error packing parsed rr: %s", err.Error())
+			t.Logf("unpacked Struct: %V", rr)
+			t.Logf("         string: %v", rrString)
+			t.Logf("  parsed Struct: %V", rr2)
 			return false
 		}
 		buf = buf[:off]
 		if !bytes.Equal(buf, rrbytes) {
-			t.Logf("Parsed packed bytes don't match original bytes")
-			t.Logf("   Source Bytes: %v", rrbytes)
-			t.Logf("Unpacked Struct: %V", rr)
-			t.Logf("         String: %v", rrString)
-			t.Logf("  Parsed Struct: %V", rr2)
-			t.Logf(" Repacked Bytes: %v", buf)
+			t.Logf("parsed packed bytes don't match original bytes")
+			t.Logf("   source bytes: %v", rrbytes)
+			t.Logf("unpacked struct: %V", rr)
+			t.Logf("         string: %v", rrString)
+			t.Logf("  parsed struct: %V", rr2)
+			t.Logf(" repacked bytes: %v", buf)
 			return false
 		}
 		return true
@@ -317,7 +317,7 @@ func TestParseDirectiveMisc(t *testing.T) {
 	for i, o := range tests {
 		rr, e := NewRR(i)
 		if e != nil {
-			t.Log("Failed to parse RR: " + e.Error())
+			t.Log("failed to parse RR: " + e.Error())
 			t.Fail()
 			continue
 		}
@@ -336,11 +336,12 @@ func TestNSEC(t *testing.T) {
 		"p2209hipbpnm681knjnu0m1febshlv4e.nl. IN NSEC3 1 1 5 30923C44C6CBBB8F P90DG1KE8QEAN0B01613LHQDG0SOJ0TA NS SOA TXT RRSIG DNSKEY NSEC3PARAM": "p2209hipbpnm681knjnu0m1febshlv4e.nl.\t3600\tIN\tNSEC3\t1 1 5 30923C44C6CBBB8F P90DG1KE8QEAN0B01613LHQDG0SOJ0TA NS SOA TXT RRSIG DNSKEY NSEC3PARAM",
 		"localhost.dnssex.nl. IN NSEC www.dnssex.nl. A RRSIG NSEC":                                                                                 "localhost.dnssex.nl.\t3600\tIN\tNSEC\twww.dnssex.nl. A RRSIG NSEC",
 		"localhost.dnssex.nl. IN NSEC www.dnssex.nl. A RRSIG NSEC TYPE65534":                                                                       "localhost.dnssex.nl.\t3600\tIN\tNSEC\twww.dnssex.nl. A RRSIG NSEC TYPE65534",
+		"localhost.dnssex.nl. IN NSEC www.dnssex.nl. A RRSIG NSec Type65534":                                                                       "localhost.dnssex.nl.\t3600\tIN\tNSEC\twww.dnssex.nl. A RRSIG NSEC TYPE65534",
 	}
 	for i, o := range nsectests {
 		rr, e := NewRR(i)
 		if e != nil {
-			t.Log("Failed to parse RR: " + e.Error())
+			t.Log("failed to parse RR: " + e.Error())
 			t.Fail()
 			continue
 		}
@@ -361,7 +362,7 @@ func TestParseLOC(t *testing.T) {
 	for i, o := range lt {
 		rr, e := NewRR(i)
 		if e != nil {
-			t.Log("Failed to parse RR: " + e.Error())
+			t.Log("failed to parse RR: " + e.Error())
 			t.Fail()
 			continue
 		}
@@ -381,7 +382,7 @@ func TestParseDS(t *testing.T) {
 	for i, o := range dt {
 		rr, e := NewRR(i)
 		if e != nil {
-			t.Log("Failed to parse RR: " + e.Error())
+			t.Log("failed to parse RR: " + e.Error())
 			t.Fail()
 			continue
 		}
@@ -417,7 +418,32 @@ func TestQuotes(t *testing.T) {
 	for i, o := range tests {
 		rr, e := NewRR(i)
 		if e != nil {
-			t.Log("Failed to parse RR: " + e.Error())
+			t.Log("failed to parse RR: " + e.Error())
+			t.Fail()
+			continue
+		}
+		if rr.String() != o {
+			t.Logf("`%s' should be equal to\n`%s', but is\n`%s'\n", i, o, rr.String())
+			t.Fail()
+		} else {
+			t.Logf("RR is OK: `%s'", rr.String())
+		}
+	}
+}
+
+func TestParseClass(t *testing.T) {
+	tests := map[string]string{
+		"t.example.com. IN A 127.0.0.1": "t.example.com.	3600	IN	A	127.0.0.1",
+		"t.example.com. CS A 127.0.0.1": "t.example.com.	3600	CS	A	127.0.0.1",
+		"t.example.com. CH A 127.0.0.1": "t.example.com.	3600	CH	A	127.0.0.1",
+		// ClassANY can not occur in zone files
+		// "t.example.com. ANY A 127.0.0.1": "t.example.com.	3600	ANY	A	127.0.0.1",
+		"t.example.com. NONE A 127.0.0.1": "t.example.com.	3600	NONE	A	127.0.0.1",
+	}
+	for i, o := range tests {
+		rr, e := NewRR(i)
+		if e != nil {
+			t.Log("failed to parse RR: " + e.Error())
 			t.Fail()
 			continue
 		}
@@ -470,7 +496,7 @@ func TestBrace(t *testing.T) {
 	for i, o := range tests {
 		rr, e := NewRR(i)
 		if e != nil {
-			t.Log("Failed to parse RR: " + e.Error() + "\n\t" + i)
+			t.Log("failed to parse RR: " + e.Error() + "\n\t" + i)
 			t.Fail()
 			continue
 		}
@@ -488,6 +514,8 @@ func TestParseFailure(t *testing.T) {
 		"miek.nl. IN AAAA ::x",
 		"miek.nl. IN MX a0 miek.nl.",
 		"miek.nl aap IN MX mx.miek.nl.",
+		"miek.nl 200 IN mxx 10 mx.miek.nl.",
+		"miek.nl. inn MX 10 mx.miek.nl.",
 		// "miek.nl. IN CNAME ", // actually valid nowadays, zero size rdata
 		"miek.nl. IN CNAME ..",
 		"miek.nl. PA MX 10 miek.nl.",
@@ -497,25 +525,29 @@ func TestParseFailure(t *testing.T) {
 	for _, s := range tests {
 		_, err := NewRR(s)
 		if err == nil {
-			t.Logf("Should have triggered an error: \"%s\"", s)
+			t.Logf("should have triggered an error: \"%s\"", s)
 			t.Fail()
 		}
 	}
 }
 
 func TestZoneParsing(t *testing.T) {
-	f, err := os.Open("test.db")
+	f, err := os.Open("parse_test.db")
 	if err != nil {
 		return
 	}
 	defer f.Close()
 	start := time.Now().UnixNano()
-	to := ParseZone(f, "", "test.db")
+	to := ParseZone(f, "", "parse_test.db")
 	var i int
 	for x := range to {
-		x = x
-		//t.Logf("%s\n", x.RR)
 		i++
+		if x.Error != nil {
+			t.Logf("%s\n", x.Error)
+			t.Fail()
+			continue
+		}
+		t.Logf("%s\n", x.RR)
 	}
 	delta := time.Now().UnixNano() - start
 	t.Logf("%d RRs parsed in %.2f s (%.2f RR/s)", i, float32(delta)/1e9, float32(i)/(float32(delta)/1e9))
@@ -607,17 +639,17 @@ b1slImA8YVJyuIDsj7kwzG7jnERNqnWxZ48AWkskmdHaVDP4BcelrTI3rMXdXF5D
                                 rvs2.example.com. )`
 	rr, err := NewRR(h)
 	if err != nil {
-		t.Fatalf("Failed to parse RR: %s", err)
+		t.Fatalf("failed to parse RR: %s", err)
 	}
 	t.Logf("RR: %s", rr)
 	msg := new(Msg)
 	msg.Answer = []RR{rr, rr}
 	bytes, err := msg.Pack()
 	if err != nil {
-		t.Fatalf("Failed to pack msg: %s", err)
+		t.Fatalf("failed to pack msg: %s", err)
 	}
 	if err := msg.Unpack(bytes); err != nil {
-		t.Fatalf("Failed to unpack msg: %s", err)
+		t.Fatalf("failed to unpack msg: %s", err)
 	}
 	if len(msg.Answer) != 2 {
 		t.Fatalf("2 answers expected: %V", msg)
@@ -630,7 +662,7 @@ b1slImA8YVJyuIDsj7kwzG7jnERNqnWxZ48AWkskmdHaVDP4BcelrTI3rMXdXF5D
 		}
 		for j, s := range []string{"rvs1.example.com.", "rvs2.example.com."} {
 			if rr.RendezvousServers[j] != s {
-				t.Fatalf("Expected server %d of record %d to be %s:\n%V", j, i, s, msg)
+				t.Fatalf("expected server %d of record %d to be %s:\n%V", j, i, s, msg)
 			}
 		}
 	}
@@ -649,7 +681,7 @@ func TestLineNumberError(t *testing.T) {
 	s := "example.com. 1000 SOA master.example.com. admin.example.com. monkey 4294967294 4294967293 4294967295 100"
 	if _, err := NewRR(s); err != nil {
 		if err.Error() != "dns: bad SOA zone parameter: \"monkey\" at line: 1:68" {
-			t.Logf("Not expecting this error: " + err.Error())
+			t.Logf("not expecting this error: " + err.Error())
 			t.Fail()
 		}
 	}
@@ -674,7 +706,7 @@ func TestLineNumberError2(t *testing.T) {
 		} else {
 			if e.Error() != err {
 				t.Logf("%s\n", in)
-				t.Logf("Error should be %s is %s\n", err, e.Error())
+				t.Logf("error should be %s is %s\n", err, e.Error())
 				t.Fail()
 			}
 		}
@@ -727,8 +759,34 @@ func TestRfc1982(t *testing.T) {
 
 func TestEmpty(t *testing.T) {
 	for _ = range ParseZone(strings.NewReader(""), "", "") {
-		t.Logf("Should be empty")
+		t.Logf("should be empty")
 		t.Fail()
+	}
+}
+
+func TestLowercaseTokens(t *testing.T) {
+	var testrecords = []string{
+		"example.org. 300 IN a 1.2.3.4",
+		"example.org. 300 in A 1.2.3.4",
+		"example.org. 300 in a 1.2.3.4",
+		"example.org. 300 a 1.2.3.4",
+		"example.org. 300 A 1.2.3.4",
+		"example.org. IN a 1.2.3.4",
+		"example.org. in A 1.2.3.4",
+		"example.org. in a 1.2.3.4",
+		"example.org. a 1.2.3.4",
+		"example.org. A 1.2.3.4",
+		"example.org. a 1.2.3.4",
+		"$ORIGIN example.org.\n a 1.2.3.4",
+		"$Origin example.org.\n a 1.2.3.4",
+		"$origin example.org.\n a 1.2.3.4",
+		"example.org. Class1 Type1 1.2.3.4",
+	}
+	for _, testrr := range testrecords {
+		_, err := NewRR(testrr)
+		if err != nil {
+			t.Errorf("failed to parse %#v, got %s", testrr, err.Error())
+		}
 	}
 }
 
@@ -789,25 +847,25 @@ func TestSRVPacking(t *testing.T) {
 
 	_, err := msg.Pack()
 	if err != nil {
-		t.Fatalf("Couldn't pack %v\n", msg)
+		t.Fatalf("couldn't pack %v\n", msg)
 	}
 }
 
 func TestParseBackslash(t *testing.T) {
 	if r, e := NewRR("nul\\000gap.test.globnix.net. 600 IN	A 192.0.2.10"); e != nil {
-		t.Fatalf("Could not create RR with \\000 in it")
+		t.Fatalf("could not create RR with \\000 in it")
 	} else {
-		t.Logf("Parsed %s\n", r.String())
+		t.Logf("parsed %s\n", r.String())
 	}
 	if r, e := NewRR(`nul\000gap.test.globnix.net. 600 IN TXT "Hello\123"`); e != nil {
-		t.Fatalf("Could not create RR with \\000 in it")
+		t.Fatalf("could not create RR with \\000 in it")
 	} else {
-		t.Logf("Parsed %s\n", r.String())
+		t.Logf("parsed %s\n", r.String())
 	}
 	if r, e := NewRR(`m\ @\ iek.nl. IN 3600 A 127.0.0.1`); e != nil {
-		t.Fatalf("Could not create RR with \\ and \\@ in it")
+		t.Fatalf("could not create RR with \\ and \\@ in it")
 	} else {
-		t.Logf("Parsed %s\n", r.String())
+		t.Logf("parsed %s\n", r.String())
 	}
 }
 
@@ -829,10 +887,10 @@ func TestILNP(t *testing.T) {
 	for _, t1 := range tests {
 		r, e := NewRR(t1)
 		if e != nil {
-			t.Fatalf("An error occured: %s\n", e.Error())
+			t.Fatalf("an error occured: %s\n", e.Error())
 		} else {
 			if t1 != r.String() {
-				t.Fatalf("Strings should be equal %s %s", t1, r.String())
+				t.Fatalf("strings should be equal %s %s", t1, r.String())
 			}
 		}
 	}
@@ -851,7 +909,7 @@ func TestNsapGposEidNimloc(t *testing.T) {
 	for i, o := range dt {
 		rr, e := NewRR(i)
 		if e != nil {
-			t.Log("Failed to parse RR: " + e.Error())
+			t.Log("failed to parse RR: " + e.Error())
 			t.Fail()
 			continue
 		}
@@ -872,7 +930,7 @@ func TestPX(t *testing.T) {
 	for i, o := range dt {
 		rr, e := NewRR(i)
 		if e != nil {
-			t.Log("Failed to parse RR: " + e.Error())
+			t.Log("failed to parse RR: " + e.Error())
 			t.Fail()
 			continue
 		}
@@ -928,11 +986,11 @@ func TestEUIxx(t *testing.T) {
 	for i, o := range tests {
 		r, e := NewRR(i)
 		if e != nil {
-			t.Logf("Failed to parse %s: %s\n", i, e.Error())
+			t.Logf("failed to parse %s: %s\n", i, e.Error())
 			t.Fail()
 		}
 		if r.String() != o {
-			t.Logf("Want %s, got %s\n", o, r.String())
+			t.Logf("want %s, got %s\n", o, r.String())
 			t.Fail()
 		}
 	}
@@ -947,11 +1005,11 @@ func TestUserRR(t *testing.T) {
 	for i, o := range tests {
 		r, e := NewRR(i)
 		if e != nil {
-			t.Logf("Failed to parse %s: %s\n", i, e.Error())
+			t.Logf("failed to parse %s: %s\n", i, e.Error())
 			t.Fail()
 		}
 		if r.String() != o {
-			t.Logf("Want %s, got %s\n", o, r.String())
+			t.Logf("want %s, got %s\n", o, r.String())
 			t.Fail()
 		}
 	}
@@ -961,60 +1019,60 @@ func TestTXT(t *testing.T) {
 	// Test single entry TXT record
 	rr, err := NewRR(`_raop._tcp.local. 60 IN TXT "single value"`)
 	if err != nil {
-		t.Error("Failed to parse single value TXT record", err)
+		t.Error("failed to parse single value TXT record", err)
 	} else if rr, ok := rr.(*TXT); !ok {
-		t.Error("Wrong type, record should be of type TXT")
+		t.Error("wrong type, record should be of type TXT")
 	} else {
 		if len(rr.Txt) != 1 {
-			t.Error("Bad size of TXT value:", len(rr.Txt))
+			t.Error("bad size of TXT value:", len(rr.Txt))
 		} else if rr.Txt[0] != "single value" {
-			t.Error("Bad single value")
+			t.Error("bad single value")
 		}
 		if rr.String() != `_raop._tcp.local.	60	IN	TXT	"single value"` {
-			t.Error("Bad representation of TXT record:", rr.String())
+			t.Error("bad representation of TXT record:", rr.String())
 		}
 		if rr.len() != 28+1+12 {
-			t.Error("Bad size of serialized record:", rr.len())
+			t.Error("bad size of serialized record:", rr.len())
 		}
 	}
 
 	// Test multi entries TXT record
 	rr, err = NewRR(`_raop._tcp.local. 60 IN TXT "a=1" "b=2" "c=3" "d=4"`)
 	if err != nil {
-		t.Error("Failed to parse multi-values TXT record", err)
+		t.Error("failed to parse multi-values TXT record", err)
 	} else if rr, ok := rr.(*TXT); !ok {
-		t.Error("Wrong type, record should be of type TXT")
+		t.Error("wrong type, record should be of type TXT")
 	} else {
 		if len(rr.Txt) != 4 {
-			t.Error("Bad size of TXT multi-value:", len(rr.Txt))
+			t.Error("bad size of TXT multi-value:", len(rr.Txt))
 		} else if rr.Txt[0] != "a=1" || rr.Txt[1] != "b=2" || rr.Txt[2] != "c=3" || rr.Txt[3] != "d=4" {
-			t.Error("Bad values in TXT records")
+			t.Error("bad values in TXT records")
 		}
 		if rr.String() != `_raop._tcp.local.	60	IN	TXT	"a=1" "b=2" "c=3" "d=4"` {
-			t.Error("Bad representation of TXT multi value record:", rr.String())
+			t.Error("bad representation of TXT multi value record:", rr.String())
 		}
 		if rr.len() != 28+1+3+1+3+1+3+1+3 {
-			t.Error("Bad size of serialized multi value record:", rr.len())
+			t.Error("bad size of serialized multi value record:", rr.len())
 		}
 	}
 
 	// Test empty-string in TXT record
 	rr, err = NewRR(`_raop._tcp.local. 60 IN TXT ""`)
 	if err != nil {
-		t.Error("Failed to parse empty-string TXT record", err)
+		t.Error("failed to parse empty-string TXT record", err)
 	} else if rr, ok := rr.(*TXT); !ok {
-		t.Error("Wrong type, record should be of type TXT")
+		t.Error("wrong type, record should be of type TXT")
 	} else {
 		if len(rr.Txt) != 1 {
-			t.Error("Bad size of TXT empty-string value:", len(rr.Txt))
+			t.Error("bad size of TXT empty-string value:", len(rr.Txt))
 		} else if rr.Txt[0] != "" {
-			t.Error("Bad value for empty-string TXT record")
+			t.Error("bad value for empty-string TXT record")
 		}
 		if rr.String() != `_raop._tcp.local.	60	IN	TXT	""` {
-			t.Error("Bad representation of empty-string TXT record:", rr.String())
+			t.Error("bad representation of empty-string TXT record:", rr.String())
 		}
 		if rr.len() != 28+1 {
-			t.Error("Bad size of serialized record:", rr.len())
+			t.Error("bad size of serialized record:", rr.len())
 		}
 	}
 }
@@ -1022,17 +1080,17 @@ func TestTXT(t *testing.T) {
 func TestTypeXXXX(t *testing.T) {
 	_, err := NewRR("example.com IN TYPE1234 \\# 4 aabbccdd")
 	if err != nil {
-		t.Logf("Failed to parse TYPE1234 RR: ", err.Error())
+		t.Logf("failed to parse TYPE1234 RR: %s", err.Error())
 		t.Fail()
 	}
 	_, err = NewRR("example.com IN TYPE655341 \\# 8 aabbccddaabbccdd")
 	if err == nil {
-		t.Logf("This should not work, for TYPE655341")
+		t.Logf("this should not work, for TYPE655341")
 		t.Fail()
 	}
 	_, err = NewRR("example.com IN TYPE1 \\# 4 0a000001")
 	if err == nil {
-		t.Logf("This should not work")
+		t.Logf("this should not work")
 		t.Fail()
 	}
 }
@@ -1040,7 +1098,7 @@ func TestTypeXXXX(t *testing.T) {
 func TestPTR(t *testing.T) {
 	_, err := NewRR("144.2.0.192.in-addr.arpa. 900 IN PTR ilouse03146p0\\(.example.com.")
 	if err != nil {
-		t.Error("Failed to parse ", err.Error())
+		t.Error("failed to parse ", err.Error())
 	}
 }
 
@@ -1058,7 +1116,7 @@ func TestDigit(t *testing.T) {
 		r, e := NewRR(s)
 		buf := make([]byte, 40)
 		if e != nil {
-			t.Fatalf("Failed to parse %s\n", e.Error())
+			t.Fatalf("failed to parse %s\n", e.Error())
 		}
 		PackRR(r, buf, 0, nil, false)
 		t.Logf("%v\n", buf)
@@ -1067,7 +1125,7 @@ func TestDigit(t *testing.T) {
 		}
 		r1, _, _ := UnpackRR(buf, 0)
 		if r1.Header().Ttl != 100 {
-			t.Fatalf("Ttl should %d, is %d", 100, r1.Header().Ttl)
+			t.Fatalf("TTL should %d, is %d", 100, r1.Header().Ttl)
 		}
 	}
 }
@@ -1092,7 +1150,7 @@ func TestTxtEqual(t *testing.T) {
 	rr1.Txt = []string{"a\"a", "\"", "b"}
 	rr2, _ := NewRR(rr1.String())
 	if rr1.String() != rr2.String() {
-		t.Logf("These two TXT records should match")
+		t.Logf("these two TXT records should match")
 		t.Logf("\n%s\n%s\n", rr1.String(), rr2.String())
 		t.Fail() // This is not an error, but keep this test.
 	}
@@ -1110,11 +1168,12 @@ func TestTxtLong(t *testing.T) {
 	}
 	str := rr1.String()
 	if len(str) < len(rr1.Txt[0]) {
-		t.Logf("String conversion should just work")
+		t.Logf("string conversion should work")
 		t.Fail()
 	}
 }
 
+// Basically, don't crash.
 func TestMalformedPackets(t *testing.T) {
 	var packets = []string{
 		"0021641c0000000100000000000078787878787878787878787303636f6d0000100001",
@@ -1129,5 +1188,22 @@ func TestMalformedPackets(t *testing.T) {
 		var msg Msg
 		msg.Unpack(data)
 		//		println(msg.String())
+	}
+}
+
+func TestDynamicUpdateParsing(t *testing.T) {
+	prefix := "example.com. IN "
+	for _, typ := range TypeToString {
+		if typ == "CAA" || typ == "OPT" || typ == "AXFR" || typ == "IXFR" || typ == "ANY" || typ == "TKEY" ||
+			typ == "TSIG" || typ == "ISDN" || typ == "UNSPEC" || typ == "NULL" || typ == "ATMA" {
+			continue
+		}
+		r, e := NewRR(prefix + typ)
+		if e != nil {
+			t.Log("failure to parse: " + prefix + typ)
+			t.Fail()
+		} else {
+			t.Logf("parsed: %s", r.String())
+		}
 	}
 }

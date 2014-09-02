@@ -49,7 +49,7 @@
 // The following is slightly more verbose, but more flexible:
 //
 //      m1 := new(dns.Msg)
-//      m1.Id = Id()
+//      m1.Id = dns.Id()
 //      m1.RecursionDesired = true
 //      m1.Question = make([]Question, 1)
 //      m1.Question[0] = dns.Question{"miek.nl.", dns.TypeMX, dns.ClassINET}
@@ -58,7 +58,7 @@
 // Basic use pattern for synchronous querying the DNS at a
 // server configured on 127.0.0.1 and port 53:
 //
-//      c := new(Client)
+//      c := new(dns.Client)
 //      in, rtt, err := c.Exchange(m1, "127.0.0.1:53")
 //
 // Suppressing
@@ -96,7 +96,6 @@
 //
 // For domain names, in addition to the above rules brackets, periods,
 // spaces, semicolons and the at symbol are escaped.
-//
 package dns
 
 import (
@@ -179,32 +178,6 @@ func (h *RR_Header) len() int {
 	l := len(h.Name) + 1
 	l += 10 // rrtype(2) + class(2) + ttl(4) + rdlength(2)
 	return l
-}
-
-// find best matching pattern for zone
-func zoneMatch(pattern, zone string) (ok bool) {
-	if len(pattern) == 0 {
-		return
-	}
-	if len(zone) == 0 {
-		zone = "."
-	}
-	// pattern = Fqdn(pattern) // should already be a fqdn
-	zone = Fqdn(zone)
-	i := 0
-	for {
-		ok = pattern[len(pattern)-1-i] == zone[len(zone)-1-i]
-		i++
-
-		if !ok {
-			break
-		}
-		if len(pattern)-1-i < 0 || len(zone)-1-i < 0 {
-			break
-		}
-
-	}
-	return
 }
 
 // ToRFC3597 converts a known RR to the unknown RR representation

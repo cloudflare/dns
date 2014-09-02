@@ -51,6 +51,14 @@ var (
 	ErrRRset     error = &Error{err: "bad rrset"}
 )
 
+// Id, by default, returns a 16 bits random number to be used as a
+// message id. The random provided should be good enough. This being a
+// variable the function can be reassigned to a custom function.
+// For instance, to make it return a static value:
+//
+//	dns.Id = func() uint16 { return 3 }
+var Id func() uint16 = id
+
 // A manually-unpacked version of (id, bits).
 // This is in its own struct for easy printing.
 type MsgHdr struct {
@@ -128,6 +136,7 @@ var TypeToString = map[uint16]string{
 	TypeNSEC:       "NSEC",
 	TypeNULL:       "NULL",
 	TypeOPT:        "OPT",
+	TypeOPENPGPKEY: "OPENPGPKEY",
 	TypePTR:        "PTR",
 	TypeRKEY:       "RKEY",
 	TypeRP:         "RP",
@@ -851,7 +860,7 @@ func packStructCompress(any interface{}, msg []byte, off int, compression map[st
 	return off, err
 }
 
-// TODO(mg): Fix use of rdlength here
+// TODO(miek): Fix use of rdlength here
 
 // Unpack a reflect.StructValue from msg.
 // Same restrictions as packStructValue.
@@ -859,6 +868,9 @@ func unpackStructValue(val reflect.Value, msg []byte, off int) (off1 int, err er
 	var rdend int
 	lenmsg := len(msg)
 	for i := 0; i < val.NumField(); i++ {
+		if off > lenmsg {
+			return lenmsg, &Error{"bad offset unpacking"}
+		}
 		switch fv := val.Field(i); fv.Kind() {
 		default:
 			return lenmsg, &Error{err: "bad kind unpacking"}
@@ -1535,6 +1547,7 @@ func (dns *Msg) Unpack(msg []byte) (err error) {
 	// If we see a TC bit being set we return here, without
 	// an error, because technically it isn't an error. So return
 	// without parsing the potentially corrupt packet and hitting an error.
+	// TODO(miek): this isn't the best strategy!
 	if dns.Truncated {
 		dns.Answer = nil
 		dns.Ns = nil
@@ -1693,6 +1706,9 @@ func compressionLenHelper(c map[string]int, s string) {
 func compressionLenSearch(c map[string]int, s string) (int, bool) {
 	off := 0
 	end := false
+	if s == "" { // don't bork on bogus data
+		return 0, false
+	}
 	for {
 		if _, ok := c[s[off:]]; ok {
 			return len(s[off:]), true
@@ -1782,9 +1798,9 @@ func compressionLenSearchType(c map[string]int, r RR) (int, bool) {
 	return 0, false
 }
 
-// Id return a 16 bits random number to be used as a
+// id returns a 16 bits random number to be used as a
 // message id. The random provided should be good enough.
-func Id() uint16 {
+func id() uint16 {
 	return uint16(rand.Int()) ^ uint16(time.Now().Nanosecond())
 }
 

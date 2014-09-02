@@ -9,51 +9,82 @@ import (
 	"time"
 )
 
-func newTestServer(t *testing.T) {
-	// Defined in server_test.go
-	HandleFunc("miek.nl.", HelloServer)
-	HandleFunc("example.com.", AnotherHelloServer)
-	go func() {
-		err := ListenAndServe(":8063", "udp", nil)
-		if err != nil {
-			t.Log("ListenAndServe: ", err.Error())
-			t.Fatal()
-		}
-	}()
-	time.Sleep(4e8)
-}
-
 func TestClientSync(t *testing.T) {
+	HandleFunc("miek.nl.", HelloServer)
+	defer HandleRemove("miek.nl.")
+
+	s, addrstr, err := RunLocalUDPServer("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Unable to run test server: %s", err)
+	}
+	defer s.Shutdown()
+
 	m := new(Msg)
 	m.SetQuestion("miek.nl.", TypeSOA)
 
 	c := new(Client)
-	r, _, _ := c.Exchange(m, "127.0.0.1:6053")
-
+	r, _, e := c.Exchange(m, addrstr)
+	if e != nil {
+		t.Logf("failed to exchange: %s", e.Error())
+		t.Fail()
+	}
 	if r != nil && r.Rcode != RcodeSuccess {
-		t.Log("Failed to get an valid answer")
+		t.Log("failed to get an valid answer")
+		t.Fail()
+		t.Logf("%v\n", r)
+	}
+	// And now with plain Exchange().
+	r, e = Exchange(m, addrstr)
+	if e != nil {
+		t.Logf("failed to exchange: %s", e.Error())
+		t.Fail()
+	}
+	if r != nil && r.Rcode != RcodeSuccess {
+		t.Log("failed to get an valid answer")
 		t.Fail()
 		t.Logf("%v\n", r)
 	}
 }
 
 func TestClientEDNS0(t *testing.T) {
+	HandleFunc("miek.nl.", HelloServer)
+	defer HandleRemove("miek.nl.")
+
+	s, addrstr, err := RunLocalUDPServer("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Unable to run test server: %s", err)
+	}
+	defer s.Shutdown()
+
 	m := new(Msg)
 	m.SetQuestion("miek.nl.", TypeDNSKEY)
 
 	m.SetEdns0(2048, true)
 
 	c := new(Client)
-	r, _, _ := c.Exchange(m, "127.0.0.1:6053")
+	r, _, e := c.Exchange(m, addrstr)
+	if e != nil {
+		t.Logf("failed to exchange: %s", e.Error())
+		t.Fail()
+	}
 
 	if r != nil && r.Rcode != RcodeSuccess {
-		t.Log("Failed to get an valid answer")
+		t.Log("failed to get an valid answer")
 		t.Fail()
 		t.Logf("%v\n", r)
 	}
 }
 
 func TestSingleSingleInflight(t *testing.T) {
+	HandleFunc("miek.nl.", HelloServer)
+	defer HandleRemove("miek.nl.")
+
+	s, addrstr, err := RunLocalUDPServer("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Unable to run test server: %s", err)
+	}
+	defer s.Shutdown()
+
 	m := new(Msg)
 	m.SetQuestion("miek.nl.", TypeDNSKEY)
 
@@ -63,7 +94,7 @@ func TestSingleSingleInflight(t *testing.T) {
 	ch := make(chan time.Duration)
 	for i := 0; i < nr; i++ {
 		go func() {
-			_, rtt, _ := c.Exchange(m, "127.0.0.1:6053")
+			_, rtt, _ := c.Exchange(m, addrstr)
 			ch <- rtt
 		}()
 	}
@@ -79,7 +110,7 @@ Loop:
 				first = rtt
 			} else {
 				if first != rtt {
-					t.Log("All rtt should be equal")
+					t.Log("all rtts should be equal")
 					t.Fail()
 				}
 			}
@@ -101,12 +132,12 @@ func TestClientTsigAXFR(t *testing.T) {
 	tr.TsigSecret = map[string]string{"axfr.": "so6ZGir4GPAqINNh9U5c3A=="}
 
 	if a, err := tr.In(m, "176.58.119.54:53"); err != nil {
-		t.Log("Failed to setup axfr: " + err.Error())
+		t.Log("failed to setup axfr: " + err.Error())
 		t.Fatal()
 	} else {
 		for ex := range a {
 			if ex.Error != nil {
-				t.Logf("Error %s\n", ex.Error.Error())
+				t.Logf("error %s\n", ex.Error.Error())
 				t.Fail()
 				break
 			}

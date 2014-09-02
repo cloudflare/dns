@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/miekg/dns.svg?branch=master)](https://travis-ci.org/miekg/dns)
+
 # Alternative (more granular) approach to a DNS library
 
 > Less is more.
@@ -30,6 +32,8 @@ A not-so-up-to-date-list-that-may-be-actually-current:
 * https://github.com/fcambus/rrda
 * https://github.com/kenshinx/godns
 * https://github.com/skynetservices/skydns
+* https://github.com/DevelopersPL/godnsagent
+* https://github.com/duedil-ltd/discodns
 * ... (send pull request if you want to be listed here)
 
 # Features
@@ -45,11 +49,12 @@ A not-so-up-to-date-list-that-may-be-actually-current:
 * EDNS0, NSID;
 * AXFR/IXFR;
 * TSIG;
-* DNS name compression.
+* DNS name compression;
+* Depends only on the standard library.
 
 Have fun!
 
-Miek Gieben  -  2010-2012  -  miek@miek.nl
+Miek Gieben  -  2010-2012  -  <miek@miek.nl>
 
 # Building
 
@@ -109,10 +114,11 @@ Example programs can be found in the `github.com/miekg/exdns` repository.
 * 6742 - ILNP DNS
 * 6891 - EDNS0 update
 * 6895 - DNS IANA considerations
+* 6975 - Algorithm Understanding in DNSSEC
 * 7043 - EUI48/EUI64 records
+* 7314 - DNS (EDNS) EXPIRE Option
 * xxxx - URI record (draft)
 * xxxx - EDNS0 DNS Update Lease (draft)
-* xxxx - Algorithm-Signal (draft)
 
 ## Loosely based upon
 
@@ -123,10 +129,10 @@ Example programs can be found in the `github.com/miekg/exdns` repository.
 
 ## TODO
 
-* Support for on-the-fly-signing or check how to do it;
-* Ratelimiting? server side (RRL);
-* Make a srv.Stop() that stops the server;
 * privatekey.Precompute() when signing?
-* Last remaining RRs: APL, ATMA, A6, KEY, SIG and NXT;
+* Last remaining RRs: APL, ATMA, A6 and NXT;
+* Missing in parsing: ISDN, UNSPEC, ATMA;
 * CAA parsing is broken;
+* NSEC(3) cover/match/closest enclose;
 * Replies with TC bit are not parsed to the end.
+* SIG(0)
