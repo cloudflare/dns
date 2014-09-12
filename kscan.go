@@ -1,7 +1,3 @@
-// Copyright 2011 Miek Gieben. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
 package dns
 
 import (
@@ -128,13 +124,13 @@ func readPrivateKeyDSA(m map[string]string) (PrivateKey, error) {
 	p.X = big.NewInt(0)
 	for k, v := range m {
 		switch k {
-		case "private_value(x):":
+		case "private_value(x)":
 			v1, err := packBase64([]byte(v))
 			if err != nil {
 				return nil, err
 			}
 			p.X.SetBytes(v1)
-		case "created:", "publish:", "activate:":
+		case "created", "publish", "activate":
 			/* not used in Go (yet) */
 		}
 	}
@@ -144,16 +140,16 @@ func readPrivateKeyDSA(m map[string]string) (PrivateKey, error) {
 func readPrivateKeyECDSA(m map[string]string) (PrivateKey, error) {
 	p := new(ecdsa.PrivateKey)
 	p.D = big.NewInt(0)
-	// Need to check if we have everything
+	// TODO: validate that the required flags are present
 	for k, v := range m {
 		switch k {
-		case "privatekey:":
+		case "privatekey":
 			v1, err := packBase64([]byte(v))
 			if err != nil {
 				return nil, err
 			}
 			p.D.SetBytes(v1)
-		case "created:", "publish:", "activate:":
+		case "created", "publish", "activate":
 			/* not used in Go (yet) */
 		}
 	}
@@ -161,21 +157,7 @@ func readPrivateKeyECDSA(m map[string]string) (PrivateKey, error) {
 }
 
 func readPrivateKeyGOST(m map[string]string) (PrivateKey, error) {
-	/* TODO(miek)
-	for k, v := range m {
-		switch k {
-		case "gostasn1:":
-			v1, err := packBase64([]byte(v))
-			if err != nil {
-				return nil, err
-			}
-			v1 = v1
-			//p.D.SetBytes(v1)
-		case "created:", "publish:", "activate:":
-			// not used in Go (yet)
-		}
-	}
-	*/
+	// TODO(miek)
 	return nil, nil
 }
 
