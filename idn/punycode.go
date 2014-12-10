@@ -3,7 +3,7 @@ package idn
 
 import (
 	"bytes"
-	"github.com/miekg/dns"
+	"github.com/cloudflare/dns"
 	"strings"
 	"unicode"
 )
