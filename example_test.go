@@ -3,7 +3,7 @@ package dns_test
 import (
 	"errors"
 	"fmt"
-	"github.com/miekg/dns"
+	"github.com/cloudflare/dns"
 	"log"
 	"net"
 )
