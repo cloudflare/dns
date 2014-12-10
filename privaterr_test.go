@@ -1,7 +1,7 @@
 package dns_test
 
 import (
-	"github.com/miekg/dns"
+	"github.com/cloudflare/dns"
 	"strings"
 	"testing"
 )
