@@ -7,7 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/miekg/dns"
+	"github.com/cloudflare/dns"
 )
 
 // Implementation idea from RFC itself and from from IDNA::Punycode created by

@@ -86,7 +86,7 @@ func getTypeStruct(t types.Type, scope *types.Scope) (*types.Struct, bool) {
 
 func main() {
 	// Import and type-check the package
-	pkg, err := importer.Default().Import("github.com/miekg/dns")
+	pkg, err := importer.Default().Import("github.com/cloudflare/dns")
 	fatalIfErr(err)
 	scope := pkg.Scope()
 
@@ -229,7 +229,7 @@ func main() {
 			if sl, ok := st.Field(i).Type().(*types.Slice); ok {
 				t := sl.Underlying().String()
 				t = strings.TrimPrefix(t, "[]")
-				t = strings.TrimPrefix(t, "github.com/miekg/dns.")
+				t = strings.TrimPrefix(t, "github.com/cloudflare/dns.")
 				fmt.Fprintf(b, "%s := make([]%s, len(rr.%s)); copy(%s, rr.%s)\n",
 					f, t, f, f, f)
 				fields = append(fields, f)
