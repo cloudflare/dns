@@ -2,7 +2,7 @@ package idn_test
 
 import (
 	"fmt"
-	"github.com/miekg/dns/idn"
+	"github.com/cloudflare/dns/idn"
 )
 
 func ExampleToPunycode() {
