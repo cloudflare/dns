@@ -696,28 +696,9 @@ func packStructValue(val reflect.Value, msg []byte, off int, compression map[str
 						continue
 					}
 				}
-				// It must be a slice of 4, even if it is 16, we encode
-				// only the first 4
-				if off+net.IPv4len > lenmsg {
-					return lenmsg, &Error{err: "overflow packing a"}
-				}
-				switch fv.Len() {
-				case net.IPv6len:
-					msg[off] = byte(fv.Index(12).Uint())
-					msg[off+1] = byte(fv.Index(13).Uint())
-					msg[off+2] = byte(fv.Index(14).Uint())
-					msg[off+3] = byte(fv.Index(15).Uint())
-					off += net.IPv4len
-				case net.IPv4len:
-					msg[off] = byte(fv.Index(0).Uint())
-					msg[off+1] = byte(fv.Index(1).Uint())
-					msg[off+2] = byte(fv.Index(2).Uint())
-					msg[off+3] = byte(fv.Index(3).Uint())
-					off += net.IPv4len
-				case 0:
-					// Allowed, for dynamic updates
-				default:
-					return lenmsg, &Error{err: "overflow packing a"}
+				off, err = packA(net.IP(fv.Bytes()), msg, off)
+				if err != nil {
+					return lenmsg, err
 				}
 			case `dns:"aaaa"`:
 				if val.Type().String() == "dns.IPSECKEY" {
@@ -800,23 +781,15 @@ func packStructValue(val reflect.Value, msg []byte, off int, compression map[str
 			msg[off] = byte(fv.Uint())
 			off++
 		case reflect.Uint16:
-			if off+2 > lenmsg {
-				return lenmsg, &Error{err: "overflow packing uint16"}
+			off, err = packStructUint16(uint16(fv.Uint()), msg, off, lenmsg)
+			if err != nil {
+				return lenmsg, err
 			}
-			i := fv.Uint()
-			msg[off] = byte(i >> 8)
-			msg[off+1] = byte(i)
-			off += 2
 		case reflect.Uint32:
-			if off+4 > lenmsg {
-				return lenmsg, &Error{err: "overflow packing uint32"}
+			off, err = packStructUint32(uint32(fv.Uint()), msg, off, lenmsg)
+			if err != nil {
+				return lenmsg, err
 			}
-			i := fv.Uint()
-			msg[off] = byte(i >> 24)
-			msg[off+1] = byte(i >> 16)
-			msg[off+2] = byte(i >> 8)
-			msg[off+3] = byte(i)
-			off += 4
 		case reflect.Uint64:
 			switch typefield.Tag {
 			default:
@@ -1408,6 +1381,10 @@ func packUint16(i uint16) (byte, byte) {
 	return byte(i >> 8), byte(i)
 }
 
+func packUint32(i uint32) (byte, byte, byte, byte) {
+	return byte(i >> 24), byte(i >> 16), byte(i >> 8), byte(i)
+}
+
 func toBase32(b []byte) string {
 	return base32.HexEncoding.EncodeToString(b)
 }
@@ -1454,6 +1431,24 @@ func unpackStructUint32(msg []byte, off int, lenmsg int) (i uint32, off1 int, er
 	}
 	i, off = unpackUint32(msg, off)
 	return i, off, nil
+}
+
+// Pack a uint16 into a struct, computing the new offset and handling errors
+func packStructUint16(i uint16, msg []byte, off int, lenmsg int) (off1 int, err error) {
+	if off+2 > lenmsg {
+		return lenmsg, &Error{err: "overflow packing uint16"}
+	}
+	msg[off], msg[off+1] = packUint16(i)
+	return off + 2, nil
+}
+
+// Pack a uint32 into a struct, computing the new offset and handling errors
+func packStructUint32(i uint32, msg []byte, off int, lenmsg int) (off1 int, err error) {
+	if off+4 > lenmsg {
+		return lenmsg, &Error{err: "overflow packing uint32"}
+	}
+	msg[off], msg[off+1], msg[off+2], msg[off+3] = packUint32(i)
+	return off + 4, nil
 }
 
 // Truncates the byte slice in msg to match the expected length of the RR.
@@ -1513,14 +1508,92 @@ func unpackA(a *net.IP, msg []byte, off int) (off1 int, err error) {
 	return off, nil
 }
 
+// Pack an RR header, returning the offset to the end of the header.
+// See PackDomainName for documentation about the compression.
+func packHeader(hdr RR_Header, msg []byte, off int, compression map[string]int, compress bool) (off1 int, err error) {
+	lenmsg := len(msg)
+	if off == lenmsg {
+		return off, nil
+	}
+	off, err = PackDomainName(hdr.Name, msg, off, compression, compress)
+	if err != nil {
+		return lenmsg, err
+	}
+	off, err = packStructUint16(hdr.Rrtype, msg, off, lenmsg)
+	if err != nil {
+		return lenmsg, err
+	}
+	off, err = packStructUint16(hdr.Class, msg, off, lenmsg)
+	if err != nil {
+		return lenmsg, err
+	}
+	off, err = packStructUint32(hdr.Ttl, msg, off, lenmsg)
+	if err != nil {
+		return lenmsg, err
+	}
+	off, err = packStructUint16(hdr.Rdlength, msg, off, lenmsg)
+	if err != nil {
+		return lenmsg, err
+	}
+	return off, nil
+}
+
+// Packs the IP stored in an A record.
+func packA(a net.IP, msg []byte, off int) (off1 int, err error) {
+	lenmsg := len(msg)
+	// It must be a slice of 4, even if it is 16, we encode
+	// only the first 4
+	if off+net.IPv4len > lenmsg {
+		return lenmsg, &Error{err: "overflow packing a"}
+	}
+	switch len(a) {
+	case net.IPv6len:
+		msg[off] = a[12]
+		msg[off+1] = a[13]
+		msg[off+2] = a[14]
+		msg[off+3] = a[15]
+		off += net.IPv4len
+	case net.IPv4len:
+		msg[off] = a[0]
+		msg[off+1] = a[1]
+		msg[off+2] = a[2]
+		msg[off+3] = a[3]
+		off += net.IPv4len
+	case 0:
+		// Allowed, for dynamic updates
+	default:
+		return lenmsg, &Error{err: "overflow packing a"}
+	}
+	return off, nil
+}
+
+// Packs an A record into msg[off:].
+// RR should be of type A or (for dynamic update) RR_Header.
+// See PackDomainName for documentation about the compression.
+func packRRTypeA(rr RR, msg []byte, off int, compression map[string]int, compress bool) (off1 int, err error) {
+	hdr := rr.Header()
+	off, err = packHeader(*hdr, msg, off, compression, compress)
+	if err != nil {
+		return off, err
+	}
+	if a, ok := rr.(*A); ok {
+		off, err = packA(a.A, msg, off)
+	}
+	return off, err
+}
+
 // PackRR packs a resource record rr into msg[off:].
 // See PackDomainName for documentation about the compression.
 func PackRR(rr RR, msg []byte, off int, compression map[string]int, compress bool) (off1 int, err error) {
 	if rr == nil {
 		return len(msg), &Error{err: "nil rr"}
 	}
-
-	off1, err = packStructCompress(rr, msg, off, compression, compress)
+	switch rr.Header().Rrtype {
+	case TypeA:
+		off1, err = packRRTypeA(rr, msg, off, compression, compress)
+	default:
+		off1, err = packStructCompress(rr, msg, off, compression, compress)
+	}
 	if err != nil {
 		return len(msg), err
 	}
