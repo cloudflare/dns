@@ -14,6 +14,8 @@ import (
 	_ "crypto/sha512"
 	"encoding/asn1"
 	"encoding/hex"
+	"github.com/cloudflare/dns/gost"
+	"hash"
 	"math/big"
 	"sort"
 	"strings"
@@ -212,23 +214,24 @@ func (k *DNSKEY) ToDS(h uint8) *DS {
 	// digest buffer
 	digest := append(owner, wire...) // another copy
 
-	var hash crypto.Hash
+	var hash hash.Hash
 	switch h {
 	case SHA1:
-		hash = crypto.SHA1
+		hash = crypto.SHA1.New()
 	case SHA256:
-		hash = crypto.SHA256
+		hash = crypto.SHA256.New()
+	case GOST94:
+		hash = gost.New()
 	case SHA384:
-		hash = crypto.SHA384
+		hash = crypto.SHA384.New()
 	case SHA512:
-		hash = crypto.SHA512
+		hash = crypto.SHA512.New()
 	default:
 		return nil
 	}
 
-	s := hash.New()
-	s.Write(digest)
-	ds.Digest = hex.EncodeToString(s.Sum(nil))
+	hash.Write(digest)
+	ds.Digest = hex.EncodeToString(hash.Sum(nil))
 	return ds
 }
 
