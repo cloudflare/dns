@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+//go:generate msgp -io=false
+
+//msgp:shim net.IP as:[]byte using:ipToByte/byteToIP
+
+func ipToByte(ip net.IP) []byte { return []byte(ip) }
+func byteToIP(ip []byte) net.IP { return net.IP(ip) }
+
+//msgp:shim RR_Header as:string using:hdrToEmpty/emptyToHDR
+
+func hdrToEmpty(x RR_Header) string { return "" }
+func emptyToHDR(x string) RR_Header { return RR_Header{} }
+
 type (
 	// Type is a DNS type.
 	Type uint16
